@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="color-scheme" content="light" />
+<title>Monthly Finances</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#f6f4ef; --card:#ffffff; --ink:#211d2b; --muted:#8a8597;
+    --line:#e7e3da; --accent:#6d5bd0;
+    --income:#2f9e6f; --needs:#d9762b; --wants:#c2477e; --savings:#3a6ea5;
+    --danger:#d23b3b;
+    --display:'Fraunces',Georgia,serif; --body:'Inter',system-ui,sans-serif;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);font-family:var(--body);color:var(--ink)}
+  #root{min-height:100vh}
+  .spin{width:28px;height:28px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:s .8s linear infinite}
+  @keyframes s{to{transform:rotate(360deg)}}
+  .cell{border:1px solid transparent;background:transparent;border-radius:7px;padding:6px 8px;font:inherit;font-size:13px;color:var(--ink);width:100%;transition:border-color .12s,background .12s}
+  .cell:hover{background:var(--bg)}
+  .cell:focus{outline:none;border-color:var(--accent);background:#fff}
+  .cell.num{text-align:right;font-family:var(--mono)}
+  .cell.due{text-align:center}
+  .cell.field,.select.field{border:1px solid var(--line);background:#fff;padding:9px 10px;border-radius:9px}
+  .row.linked .cell.desc{color:var(--accent);font-weight:600}
+  .rowdel{border:none;background:transparent;color:var(--muted);font-size:17px;line-height:1;cursor:pointer;border-radius:6px;width:22px;height:22px;opacity:.4;transition:opacity .12s,color .12s}
+  .row:hover .rowdel{opacity:1}
+  .rowdel:hover{color:var(--danger);opacity:1}
+  .addrow{margin-top:8px;border:1px dashed var(--line);background:transparent;color:var(--muted);border-radius:9px;padding:7px;font:inherit;font-size:12px;cursor:pointer;transition:all .12s;width:100%}
+  .addrow:hover{border-color:var(--accent);color:var(--accent)}
+  .primary{background:var(--accent);color:#fff;border:none;border-radius:10px;padding:9px 16px;font:inherit;font-weight:600;font-size:14px;cursor:pointer;transition:filter .12s}
+  .primary:hover{filter:brightness(1.08)}
+  .primary:disabled{opacity:.4;cursor:not-allowed}
+  .ghost{background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 12px;font:inherit;font-size:14px;cursor:pointer;color:var(--ink);transition:border-color .12s}
+  .ghost:hover{border-color:var(--accent)}
+  .ghost.small{padding:8px 12px;font-size:13px}
+  .select{background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 12px;font:inherit;font-size:14px;color:var(--ink);cursor:pointer}
+  .tab{background:transparent;border:none;border-bottom:2px solid transparent;padding:8px 4px;font:inherit;font-weight:600;font-size:15px;color:var(--muted);cursor:pointer}
+  .tab.on{color:var(--ink);border-color:var(--accent)}
+  .seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#fff}
+  .seg button{border:none;background:transparent;padding:7px 12px;font:inherit;font-size:13px;cursor:pointer;color:var(--muted)}
+  .seg button.on{background:var(--accent);color:#fff}
+  .barLegend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:middle}
+  input[type=number]{-moz-appearance:textfield}
+  input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+  .lockwrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+  .lockcard{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:34px;max-width:400px;width:100%;box-shadow:0 18px 50px rgba(40,30,70,.10)}
+  .lockcard h1{font-family:var(--display);font-size:26px;margin:0 0 4px}
+  .lockcard p{color:var(--muted);font-size:13px;margin:0 0 20px;line-height:1.5}
+  .pininput{width:100%;border:1px solid var(--line);border-radius:11px;padding:13px 14px;font:inherit;font-size:16px;letter-spacing:1px;margin-bottom:10px}
+  .pininput:focus{outline:none;border-color:var(--accent)}
+  .lockerr{color:var(--danger);font-size:13px;margin:2px 0 12px;min-height:18px}
+  .lockbtn{width:100%;background:var(--accent);color:#fff;border:none;border-radius:11px;padding:13px;font:inherit;font-weight:600;font-size:15px;cursor:pointer}
+  .lockbtn:disabled{opacity:.5;cursor:not-allowed}
+  .locklink{background:none;border:none;color:var(--accent);font:inherit;font-size:13px;cursor:pointer;margin-top:14px;text-decoration:underline}
+  @media (max-width:560px){.fg2{grid-template-columns:1fr !important}}
+</style>
+</head>
+<body>
+<div id="root"><div class="lockwrap"><div class="spin"></div></div></div>
+
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+/* ───────── crypto: AES-GCM with PBKDF2 key derivation ───────── */
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+async function deriveKey(passcode, salt) {
+  const base = await crypto.subtle.importKey("raw", enc.encode(passcode), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" },
+    base,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+async function encryptJSON(obj, passcode) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveKey(passcode, salt);
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(JSON.stringify(obj)));
+  return { v: 1, salt: b64(salt), iv: b64(iv), ct: b64(ct) };
+}
+async function decryptJSON(blob, passcode) {
+  const salt = unb64(blob.salt), iv = unb64(blob.iv);
+  const key = await deriveKey(passcode, salt);
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, unb64(blob.ct));
+  return JSON.parse(dec.decode(pt));
+}
+
+const STORE = "monthly-finances-encrypted-v1";
+const readBlob = () => { try { return JSON.parse(localStorage.getItem(STORE)); } catch { return null; } };
+const writeBlob = (blob) => localStorage.setItem(STORE, JSON.stringify(blob));
+const hasVault = () => !!localStorage.getItem(STORE);
+
+/* ───────── domain helpers ───────── */
+const INR = (n) => "₹" + (Number.isFinite(n) ? n : 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+const COLS = ["income", "needs", "wants", "savings"];
+const COL_META = {
+  income: { label: "Income", tint: "var(--income)" },
+  needs: { label: "Needs", tint: "var(--needs)" },
+  wants: { label: "Wants", tint: "var(--wants)" },
+  savings: { label: "Savings", tint: "var(--savings)" },
+};
+const DEFAULTS = {
+  income: ["Salary","Freelance Project","Bonus","Gift","Dividends","Rental Income","Interest","Side Job","Tax Refund","Other"],
+  needs: ["Rent","Utilities","Groceries","Insurance","Transportation","Phone Bill","Medical","Debt Payment","Childcare","Loan Payment","Internet Bill"],
+  wants: ["Dining Out","Streaming Services","Gym Membership","Entertainment","Clothing","Hobbies","Electronics","Travel Fund","Home Decor","Miscellaneous"],
+  savings: ["Emergency Fund","Retirement","Vacation Fund","Investment Account","Education Fund","Health Savings","Home Savings","Car Fund","New Business","Other"],
+};
+const uid = () => Math.random().toString(36).slice(2, 10);
+const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+const monthLabel = (k) => { const [y,m]=k.split("-").map(Number); return new Date(y,m-1,1).toLocaleString("en-US",{month:"long",year:"numeric"}); };
+const addMonths = (k,n) => { const [y,m]=k.split("-").map(Number); return monthKey(new Date(y,m-1+n,1)); };
+const blankRow = (desc="") => ({ id: uid(), desc, due:"", planned:0, actual:0 });
+function freshMonth(){ const m={}; for(const c of COLS) m[c]=DEFAULTS[c].map(d=>blankRow(d)); return m; }
+function calcEMI(p, rate, months){ if(months<=0) return 0; const r=rate/100/12; if(r===0) return p/months; return (p*r*Math.pow(1+r,months))/(Math.pow(1+r,months)-1); }
+
+/* ───────── lock screen ───────── */
+function Lock({ mode, onUnlock, onCreate }) {
+  const [p1, setP1] = useState("");
+  const [p2, setP2] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const create = mode === "create";
+
+  const submit = async () => {
+    setErr("");
+    if (create) {
+      if (p1.length < 4) return setErr("Use at least 4 characters.");
+      if (p1 !== p2) return setErr("The two entries don't match.");
+      setBusy(true);
+      await onCreate(p1);
+      setBusy(false);
+    } else {
+      if (!p1) return;
+      setBusy(true);
+      const ok = await onUnlock(p1);
+      setBusy(false);
+      if (!ok) { setErr("Wrong passcode."); setP1(""); }
+    }
+  };
+
+  return (
+    <div className="lockwrap">
+      <div className="lockcard">
+        <h1>{create ? "Set a passcode" : "Welcome back"}</h1>
+        <p>
+          {create
+            ? "This passcode encrypts everything stored on this device. There's no recovery — if you forget it, the data can't be opened. Keep a backup using Export once you're in."
+            : "Enter your passcode to decrypt your finances on this device."}
+        </p>
+        <input className="pininput" type="password" autoFocus placeholder={create ? "New passcode" : "Passcode"}
+          value={p1} onChange={(e)=>setP1(e.target.value)} onKeyDown={(e)=>!create&&e.key==="Enter"&&submit()} />
+        {create && (
+          <input className="pininput" type="password" placeholder="Confirm passcode"
+            value={p2} onChange={(e)=>setP2(e.target.value)} onKeyDown={(e)=>e.key==="Enter"&&submit()} />
+        )}
+        <div className="lockerr">{err}</div>
+        <button className="lockbtn" onClick={submit} disabled={busy}>
+          {busy ? "Working…" : create ? "Create & continue" : "Unlock"}
+        </button>
+        {!create && (
+          <div style={{textAlign:"center"}}>
+            <button className="locklink" onClick={()=>{
+              if(confirm("This erases ALL encrypted data on this device and starts fresh. This cannot be undone. Continue?")){
+                localStorage.removeItem(STORE); location.reload();
+              }
+            }}>Forgot passcode? Reset (erases data)</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ───────── main app ───────── */
+function App() {
+  const [phase, setPhase] = useState("loading"); // loading | create | locked | open
+  const [pass, setPass] = useState(null);
+  const [months, setMonths] = useState({});
+  const [assets, setAssets] = useState([]);
+  const [current, setCurrent] = useState(monthKey(new Date()));
+  const [view, setView] = useState("budget");
+  const [valueMode, setValueMode] = useState("planned");
+  const [showBuy, setShowBuy] = useState(false);
+  const firstSave = useRef(true);
+
+  useEffect(() => { setPhase(hasVault() ? "locked" : "create"); }, []);
+
+  const applyState = (s) => {
+    setMonths(s.months || {});
+    setAssets(s.assets || []);
+    setCurrent(s.current || monthKey(new Date()));
+  };
+
+  const onCreate = async (passcode) => {
+    setPass(passcode);
+    const init = { months: { [monthKey(new Date())]: freshMonth() }, assets: [], current: monthKey(new Date()) };
+    applyState(init);
+    writeBlob(await encryptJSON(init, passcode));
+    setPhase("open");
+  };
+  const onUnlock = async (passcode) => {
+    const blob = readBlob();
+    try {
+      const s = await decryptJSON(blob, passcode);
+      setPass(passcode); applyState(s); setPhase("open"); return true;
+    } catch { return false; }
+  };
+
+  useEffect(() => {
+    if (phase !== "open") return;
+    setMonths((prev)=> prev[current] ? prev : { ...prev, [current]: freshMonth() });
+  }, [current, phase]);
+
+  // persist (encrypted) on change
+  useEffect(() => {
+    if (phase !== "open" || !pass) return;
+    if (firstSave.current) { firstSave.current = false; return; }
+    const t = setTimeout(async () => writeBlob(await encryptJSON({ months, assets, current }, pass)), 300);
+    return () => clearTimeout(t);
+  }, [months, assets, current, phase, pass]);
+
+  const month = months[current] || freshMonth();
+
+  const totals = useMemo(() => {
+    const sum=(rows,k)=>rows.reduce((a,r)=>a+(Number(r[k])||0),0);
+    const t={}; for(const c of COLS) t[c]={planned:sum(month[c]||[],"planned"),actual:sum(month[c]||[],"actual")};
+    return t;
+  }, [month]);
+
+  const incomeTotal = totals.income[valueMode];
+  const spend = { needs: totals.needs[valueMode], wants: totals.wants[valueMode], savings: totals.savings[valueMode] };
+  const allocated = spend.needs + spend.wants + spend.savings;
+  const left = incomeTotal - allocated;
+  const pct = (v) => (allocated > 0 ? (v/allocated)*100 : 0);
+
+  const editRow = useCallback((col,id,field,value)=>{
+    setMonths(prev=>{const m={...prev[current]};m[col]=m[col].map(r=>r.id===id?{...r,[field]:(field==="desc"||field==="due")?value:Number(value)||0}:r);return{...prev,[current]:m};});
+  },[current]);
+  const addRow = useCallback((col)=>{ setMonths(prev=>{const m={...prev[current]};m[col]=[...m[col],blankRow("")];return{...prev,[current]:m};}); },[current]);
+  const delRow = useCallback((col,id)=>{ setMonths(prev=>{const m={...prev[current]};m[col]=m[col].filter(r=>r.id!==id);return{...prev,[current]:m};}); },[current]);
+
+  const copyPrev = useCallback(()=>{
+    const pk=addMonths(current,-1);
+    setMonths(prev=>{ if(!prev[pk]) return prev; const src=prev[pk]; const m={}; for(const c of COLS) m[c]=src[c].map(r=>({...r,id:uid(),actual:0})); return {...prev,[current]:m}; });
+  },[current]);
+
+  const buyAsset = useCallback((form)=>{
+    const price=Number(form.price)||0, down=Number(form.down)||0, tenure=Number(form.tenure)||0, rate=Number(form.rate)||0;
+    const financed=Math.max(price-down,0);
+    const emi=form.emiOverride?(Number(form.emi)||0):Math.round(calcEMI(financed,rate,tenure));
+    const startMonth=form.startMonth||current;
+    const asset={id:uid(),name:form.name||"Asset",category:form.category||"Electronics",purchaseDate:form.purchaseDate||new Date().toISOString().slice(0,10),price,down,financed,emi,tenure,rate,startMonth};
+    setAssets(prev=>[...prev,asset]);
+    setMonths(prev=>{
+      const next={...prev};
+      const ensure=(k)=>{ if(!next[k]) next[k]=freshMonth(); else next[k]={...next[k],needs:[...next[k].needs]}; };
+      if(down>0){ ensure(startMonth); next[startMonth].needs.push({id:uid(),desc:`${asset.name} — Down payment`,due:asset.purchaseDate.slice(8,10),planned:down,actual:down,_assetId:asset.id,_kind:"down"}); }
+      for(let i=0;i<tenure;i++){ const k=addMonths(startMonth,i); ensure(k); next[k].needs.push({id:uid(),desc:`${asset.name} EMI (${i+1}/${tenure})`,due:"",planned:emi,actual:emi,_assetId:asset.id,_kind:"emi"}); }
+      return next;
+    });
+    setShowBuy(false); setCurrent(startMonth); setView("budget");
+  },[current]);
+
+  const deleteAsset = useCallback((assetId)=>{
+    setAssets(prev=>prev.filter(a=>a.id!==assetId));
+    setMonths(prev=>{ const next={}; for(const k of Object.keys(prev)){ const m={...prev[k]}; m.needs=m.needs.filter(r=>r._assetId!==assetId); next[k]=m; } return next; });
+  },[]);
+
+  const assetStatus = useCallback((a)=>{
+    let paid=0; for(let i=0;i<a.tenure;i++){ if(addMonths(a.startMonth,i)<=current) paid++; }
+    const totalEmi=a.emi*a.tenure; const remaining=Math.max(totalEmi-a.emi*paid,0);
+    return {paid,remainingMonths:Math.max(a.tenure-paid,0),remaining,totalEmi};
+  },[current]);
+
+  const monthList = useMemo(()=>{ const k=new Set(Object.keys(months)); k.add(current); return [...k].sort(); },[months,current]);
+
+  /* export / import (encrypted backup) */
+  const doExport = async () => {
+    const blob = await encryptJSON({ months, assets, current }, pass);
+    const data = JSON.stringify({ ...blob, _app: "monthly-finances" }, null, 2);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([data], { type: "application/json" }));
+    a.download = `finances-backup-${monthKey(new Date())}.json`;
+    a.click();
+  };
+  const doImport = (file) => {
+    const r = new FileReader();
+    r.onload = async () => {
+      try {
+        const blob = JSON.parse(r.result);
+        const pw = prompt("Enter the passcode this backup was saved with:");
+        if (pw == null) return;
+        const s = await decryptJSON(blob, pw);
+        applyState(s);
+        // re-encrypt under current passcode
+        writeBlob(await encryptJSON({ months: s.months, assets: s.assets, current: s.current }, pass));
+        alert("Backup imported.");
+      } catch { alert("Couldn't read that backup — wrong file or passcode."); }
+    };
+    r.readAsText(file);
+  };
+
+  if (phase === "loading") return <div className="lockwrap"><div className="spin" /></div>;
+  if (phase === "create") return <Lock mode="create" onCreate={onCreate} />;
+  if (phase === "locked") return <Lock mode="unlock" onUnlock={onUnlock} />;
+
+  return (
+    <div style={S.app}>
+      <header style={S.header}>
+        <div>
+          <div style={S.kicker}>Monthly Finances</div>
+          <h1 style={S.h1}>{monthLabel(current)}</h1>
+        </div>
+        <div style={S.headerControls}>
+          <button className="ghost" onClick={()=>setCurrent(addMonths(current,-1))} aria-label="Previous month">‹</button>
+          <select className="select" value={current} onChange={(e)=>setCurrent(e.target.value)}>
+            {monthList.map(k=><option key={k} value={k}>{monthLabel(k)}</option>)}
+          </select>
+          <button className="ghost" onClick={()=>setCurrent(addMonths(current,1))} aria-label="Next month">›</button>
+          <button className="ghost" title="Lock now" onClick={()=>location.reload()}>🔒</button>
+        </div>
+      </header>
+
+      <nav style={S.tabs}>
+        <button className={view==="budget"?"tab on":"tab"} onClick={()=>setView("budget")}>Budget</button>
+        <button className={view==="assets"?"tab on":"tab"} onClick={()=>setView("assets")}>Assets &amp; EMIs</button>
+        <div style={{flex:1}} />
+        {view==="budget" && <>
+          <div className="seg">
+            <button className={valueMode==="planned"?"on":""} onClick={()=>setValueMode("planned")}>Planned</button>
+            <button className={valueMode==="actual"?"on":""} onClick={()=>setValueMode("actual")}>Actual</button>
+          </div>
+          <button className="ghost small" onClick={copyPrev} title="Copy last month's lines into this month">Copy last month</button>
+        </>}
+        <button className="ghost small" onClick={doExport}>Export</button>
+        <label className="ghost small" style={{cursor:"pointer"}}>Import
+          <input type="file" accept="application/json" style={{display:"none"}} onChange={(e)=>e.target.files[0]&&doImport(e.target.files[0])} />
+        </label>
+        <button className="primary" onClick={()=>setShowBuy(true)}>+ Buy asset</button>
+      </nav>
+
+      {view==="budget" ? <>
+        <section style={S.summary}>
+          <Stat label="Income" value={incomeTotal} tint="var(--income)" />
+          <Stat label="Needs" value={spend.needs} sub={`${pct(spend.needs).toFixed(0)}%`} tint="var(--needs)" />
+          <Stat label="Wants" value={spend.wants} sub={`${pct(spend.wants).toFixed(0)}%`} tint="var(--wants)" />
+          <Stat label="Savings" value={spend.savings} sub={`${pct(spend.savings).toFixed(0)}%`} tint="var(--savings)" />
+          <Stat label="Left to allocate" value={left} tint={left<0?"var(--danger)":"var(--ink)"} />
+        </section>
+        <Bar needs={spend.needs} wants={spend.wants} savings={spend.savings} total={allocated} />
+        <section style={S.grid}>
+          {COLS.map(c=><BudgetColumn key={c} col={c} rows={month[c]||[]} total={totals[c]} valueMode={valueMode} onEdit={editRow} onAdd={addRow} onDel={delRow} />)}
+        </section>
+      </> : <AssetsView assets={assets} status={assetStatus} onDelete={deleteAsset} onBuy={()=>setShowBuy(true)} />}
+
+      {showBuy && <BuyModal onClose={()=>setShowBuy(false)} onSubmit={buyAsset} defaultMonth={current} />}
+    </div>
+  );
+}
+
+function Stat({label,value,sub,tint}){
+  return <div style={S.stat}>
+    <div style={S.statLabel}>{label}</div>
+    <div style={{...S.statValue,color:tint}}>{INR(value)}</div>
+    {sub && <div style={S.statSub}>{sub} of spend</div>}
+  </div>;
+}
+function Bar({needs,wants,savings,total}){
+  const seg=(v)=>(total>0?(v/total)*100:0);
+  return <div style={S.barWrap}>
+    <div style={S.bar}>
+      <span style={{width:`${seg(needs)}%`,background:"var(--needs)"}} />
+      <span style={{width:`${seg(wants)}%`,background:"var(--wants)"}} />
+      <span style={{width:`${seg(savings)}%`,background:"var(--savings)"}} />
+    </div>
+    <div className="barLegend" style={S.barLegend}>
+      <span><i style={{background:"var(--needs)"}} />Needs target 50%</span>
+      <span><i style={{background:"var(--wants)"}} />Wants target 30%</span>
+      <span><i style={{background:"var(--savings)"}} />Savings target 20%</span>
+    </div>
+  </div>;
+}
+function BudgetColumn({col,rows,total,valueMode,onEdit,onAdd,onDel}){
+  const meta=COL_META[col];
+  return <div style={S.column}>
+    <div style={{...S.colHead,borderColor:meta.tint}}>
+      <span style={{...S.colDot,background:meta.tint}} />
+      <h3 style={S.colTitle}>{meta.label}</h3>
+      <span style={S.colTotal}>{INR(total[valueMode])}</span>
+    </div>
+    <div style={S.rowHead}><span>Description</span><span style={{textAlign:"center"}}>Due</span><span style={{textAlign:"right"}}>Planned</span><span style={{textAlign:"right"}}>Actual</span><span /></div>
+    <div>
+      {rows.map(r=>(
+        <div key={r.id} style={S.row} className={r._assetId?"row linked":"row"}>
+          <input className="cell desc" value={r.desc} placeholder="—" onChange={(e)=>onEdit(col,r.id,"desc",e.target.value)} title={r._assetId?"Linked to an asset":""} />
+          <input className="cell due" value={r.due} placeholder="–" onChange={(e)=>onEdit(col,r.id,"due",e.target.value)} />
+          <input className="cell num" type="number" value={r.planned||""} placeholder="0" onChange={(e)=>onEdit(col,r.id,"planned",e.target.value)} />
+          <input className="cell num" type="number" value={r.actual||""} placeholder="0" onChange={(e)=>onEdit(col,r.id,"actual",e.target.value)} />
+          <button className="rowdel" onClick={()=>onDel(col,r.id)} aria-label="Delete line">×</button>
+        </div>
+      ))}
+    </div>
+    <button className="addrow" onClick={()=>onAdd(col)}>+ Add line</button>
+  </div>;
+}
+function AssetsView({assets,status,onDelete,onBuy}){
+  const totalValue=assets.reduce((a,x)=>a+(Number(x.price)||0),0);
+  const totalOwed=assets.reduce((a,x)=>a+status(x).remaining,0);
+  return <div>
+    <section style={S.summary}>
+      <Stat label="Assets owned" value={assets.length} tint="var(--ink)" />
+      <Stat label="Total asset value" value={totalValue} tint="var(--savings)" />
+      <Stat label="Outstanding EMI" value={totalOwed} tint="var(--danger)" />
+    </section>
+    {assets.length===0 ? (
+      <div style={S.empty}>
+        <p style={{margin:0,fontWeight:600}}>No assets yet.</p>
+        <p style={{marginTop:6,color:"var(--muted)"}}>Add something you've bought — it appears here with its value and posts the EMIs into your monthly budget.</p>
+        <button className="primary" onClick={onBuy} style={{marginTop:12}}>+ Buy asset</button>
+      </div>
+    ) : (
+      <div style={S.assetGrid}>
+        {assets.map(a=>{
+          const s=status(a); const progress=a.tenure>0?(s.paid/a.tenure)*100:100;
+          return <div key={a.id} style={S.assetCard}>
+            <div style={S.assetTop}>
+              <div><div style={S.assetName}>{a.name}</div><div style={S.assetMeta}>{a.category} · bought {a.purchaseDate}</div></div>
+              <button className="rowdel" onClick={()=>onDelete(a.id)} title="Remove asset & its EMI lines">×</button>
+            </div>
+            <div style={S.assetValue}>{INR(a.price)}</div>
+            <div style={S.assetRows}>
+              <AR k="Down payment" v={INR(a.down)} />
+              <AR k="Financed" v={INR(a.financed)} />
+              <AR k="Monthly EMI" v={INR(a.emi)} />
+              <AR k="Tenure" v={`${a.tenure} mo @ ${a.rate}%`} />
+              <AR k="Outstanding" v={INR(s.remaining)} strong />
+            </div>
+            {a.tenure>0 && <>
+              <div style={S.assetBar}><span style={{display:"block",height:"100%",width:`${progress}%`,background:"var(--accent)"}} /></div>
+              <div style={S.assetProg}>{s.paid}/{a.tenure} paid · {s.remainingMonths} left</div>
+            </>}
+          </div>;
+        })}
+      </div>
+    )}
+  </div>;
+}
+const AR=({k,v,strong})=>(<div style={S.ar}><span style={S.arK}>{k}</span><span style={{...S.arV,fontWeight:strong?700:500}}>{v}</span></div>);
+
+function BuyModal({onClose,onSubmit,defaultMonth}){
+  const [f,setF]=useState({name:"",category:"Electronics",purchaseDate:new Date().toISOString().slice(0,10),price:"",down:"",tenure:"12",rate:"12",startMonth:defaultMonth,emiOverride:false,emi:""});
+  const set=(k)=>(e)=>setF({...f,[k]:e.target.value});
+  const financed=Math.max((Number(f.price)||0)-(Number(f.down)||0),0);
+  const autoEmi=Math.round(calcEMI(financed,Number(f.rate)||0,Number(f.tenure)||0));
+  const shownEmi=f.emiOverride?(Number(f.emi)||0):autoEmi;
+  return <div style={S.modalWrap} onClick={onClose}>
+    <div style={S.modal} onClick={(e)=>e.stopPropagation()}>
+      <div style={S.modalHead}><h3 style={{margin:0}}>Buy an asset</h3><button className="rowdel" onClick={onClose}>×</button></div>
+      <p style={S.modalNote}>This registers the asset and posts its down payment + monthly EMIs into your <b>Needs</b> budget automatically.</p>
+      <div className="fg2" style={S.formGrid}>
+        <Field label="Item name" full><input className="cell field" value={f.name} placeholder="e.g. iPhone 16 Pro" onChange={set("name")} /></Field>
+        <Field label="Category"><select className="select field" value={f.category} onChange={set("category")}>{["Electronics","Vehicle","Property","Appliance","Furniture","Other"].map(c=><option key={c}>{c}</option>)}</select></Field>
+        <Field label="Purchase date"><input className="cell field" type="date" value={f.purchaseDate} onChange={set("purchaseDate")} /></Field>
+        <Field label="Price (₹)"><input className="cell field" type="number" value={f.price} placeholder="0" onChange={set("price")} /></Field>
+        <Field label="Down payment (₹)"><input className="cell field" type="number" value={f.down} placeholder="0" onChange={set("down")} /></Field>
+        <Field label="Tenure (months)"><input className="cell field" type="number" value={f.tenure} onChange={set("tenure")} /></Field>
+        <Field label="Interest rate (% p.a.)"><input className="cell field" type="number" value={f.rate} onChange={set("rate")} /></Field>
+        <Field label="EMI starts"><input className="cell field" type="month" value={f.startMonth} onChange={set("startMonth")} /></Field>
+      </div>
+      <div style={S.emiBox}>
+        <label style={S.emiToggle}><input type="checkbox" checked={f.emiOverride} onChange={(e)=>setF({...f,emiOverride:e.target.checked})} />Set EMI manually</label>
+        {f.emiOverride
+          ? <input className="cell field" type="number" value={f.emi} placeholder="EMI amount" onChange={set("emi")} style={{maxWidth:160}} />
+          : <div style={S.emiCalc}>Calculated EMI: <b>{INR(autoEmi)}</b> / month</div>}
+      </div>
+      <div style={S.emiPreview}>Financed {INR(financed)} · {f.tenure||0} months · total to pay {INR(shownEmi*(Number(f.tenure)||0)+(Number(f.down)||0))}</div>
+      <div style={S.modalActions}>
+        <button className="ghost" onClick={onClose}>Cancel</button>
+        <button className="primary" onClick={()=>onSubmit(f)} disabled={!f.name||!f.price}>Add asset &amp; post EMIs</button>
+      </div>
+    </div>
+  </div>;
+}
+const Field=({label,children,full})=>(<label style={{...S.field,gridColumn:full?"1 / -1":"auto"}}><span style={S.fieldLabel}>{label}</span>{children}</label>);
+
+const S = {
+  app:{maxWidth:1200,margin:"0 auto",padding:"12px 16px 60px"},
+  header:{display:"flex",justifyContent:"space-between",alignItems:"flex-end",flexWrap:"wrap",gap:12,paddingTop:8},
+  kicker:{fontFamily:"var(--mono)",fontSize:12,letterSpacing:2,textTransform:"uppercase",color:"var(--accent)"},
+  h1:{margin:"2px 0 0",fontFamily:"var(--display)",fontSize:34,fontWeight:800,letterSpacing:-0.5},
+  headerControls:{display:"flex",alignItems:"center",gap:8},
+  tabs:{display:"flex",alignItems:"center",gap:8,margin:"20px 0 18px",flexWrap:"wrap"},
+  summary:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12,marginBottom:16},
+  stat:{background:"var(--card)",border:"1px solid var(--line)",borderRadius:14,padding:"14px 16px"},
+  statLabel:{fontSize:12,color:"var(--muted)",textTransform:"uppercase",letterSpacing:1,fontFamily:"var(--mono)"},
+  statValue:{fontSize:24,fontWeight:800,marginTop:4,fontFamily:"var(--display)"},
+  statSub:{fontSize:12,color:"var(--muted)",marginTop:2},
+  barWrap:{marginBottom:22},
+  bar:{display:"flex",height:14,borderRadius:8,overflow:"hidden",background:"var(--line)"},
+  barLegend:{display:"flex",gap:18,marginTop:8,fontSize:12,color:"var(--muted)",flexWrap:"wrap"},
+  grid:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:16},
+  column:{background:"var(--card)",border:"1px solid var(--line)",borderRadius:16,padding:14,display:"flex",flexDirection:"column"},
+  colHead:{display:"flex",alignItems:"center",gap:8,paddingBottom:10,marginBottom:8,borderBottom:"2px solid"},
+  colDot:{width:10,height:10,borderRadius:3},
+  colTitle:{margin:0,fontSize:17,fontWeight:700,flex:1,fontFamily:"var(--display)"},
+  colTotal:{fontFamily:"var(--mono)",fontWeight:700,fontSize:14},
+  rowHead:{display:"grid",gridTemplateColumns:"1fr 36px 70px 70px 20px",gap:4,fontSize:10,textTransform:"uppercase",letterSpacing:.5,color:"var(--muted)",padding:"0 2px 4px",fontFamily:"var(--mono)"},
+  row:{display:"grid",gridTemplateColumns:"1fr 36px 70px 70px 20px",gap:4,alignItems:"center",marginBottom:2},
+  empty:{background:"var(--card)",border:"1px dashed var(--line)",borderRadius:16,padding:36,textAlign:"center"},
+  assetGrid:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:16},
+  assetCard:{background:"var(--card)",border:"1px solid var(--line)",borderRadius:16,padding:16},
+  assetTop:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"},
+  assetName:{fontWeight:700,fontSize:16,fontFamily:"var(--display)"},
+  assetMeta:{fontSize:12,color:"var(--muted)",marginTop:2},
+  assetValue:{fontSize:26,fontWeight:800,margin:"10px 0",fontFamily:"var(--display)",color:"var(--savings)"},
+  assetRows:{display:"flex",flexDirection:"column",gap:4},
+  ar:{display:"flex",justifyContent:"space-between",fontSize:13},
+  arK:{color:"var(--muted)"},
+  arV:{fontFamily:"var(--mono)"},
+  assetBar:{height:8,background:"var(--line)",borderRadius:6,overflow:"hidden",marginTop:12},
+  assetProg:{fontSize:12,color:"var(--muted)",marginTop:6},
+  modalWrap:{position:"fixed",inset:0,background:"rgba(20,18,28,0.5)",display:"flex",alignItems:"center",justifyContent:"center",padding:16,zIndex:50,backdropFilter:"blur(3px)"},
+  modal:{background:"var(--card)",border:"1px solid var(--line)",borderRadius:18,padding:22,width:"100%",maxWidth:560,maxHeight:"90vh",overflow:"auto"},
+  modalHead:{display:"flex",justifyContent:"space-between",alignItems:"center"},
+  modalNote:{fontSize:13,color:"var(--muted)",margin:"6px 0 16px"},
+  formGrid:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12},
+  field:{display:"flex",flexDirection:"column",gap:4},
+  fieldLabel:{fontSize:12,color:"var(--muted)",fontFamily:"var(--mono)"},
+  emiBox:{display:"flex",alignItems:"center",gap:14,marginTop:16,padding:12,background:"var(--bg)",borderRadius:12,flexWrap:"wrap"},
+  emiToggle:{display:"flex",alignItems:"center",gap:6,fontSize:13},
+  emiCalc:{fontSize:14},
+  emiPreview:{fontSize:12,color:"var(--muted)",marginTop:10,fontFamily:"var(--mono)"},
+  modalActions:{display:"flex",justifyContent:"flex-end",gap:10,marginTop:18},
+};
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
