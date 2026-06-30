@@ -22,11 +22,11 @@
   #root{min-height:100vh}
   .spin{width:28px;height:28px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:s .8s linear infinite}
   @keyframes s{to{transform:rotate(360deg)}}
-  .cell{border:1px solid transparent;background:transparent;border-radius:7px;padding:6px 8px;font:inherit;font-size:13px;color:var(--ink);width:100%;transition:border-color .12s,background .12s}
-  .cell:hover{background:var(--bg)}
-  .cell:focus{outline:none;border-color:var(--accent);background:#fff}
-  .cell.num{text-align:right;font-family:var(--mono)}
-  .cell.due{text-align:center}
+  .cell{border:1px solid transparent;background:#faf9f6;border-radius:8px;padding:8px 10px;font:inherit;font-size:14px;color:var(--ink);width:100%;transition:border-color .12s,background .12s;text-overflow:ellipsis}
+  .cell:hover{background:#fff;border-color:var(--line)}
+  .cell:focus{outline:none;border-color:var(--accent);background:#fff;text-overflow:clip}
+  .cell.num{text-align:right;font-family:var(--mono);font-size:13px}
+  .cell.due{text-align:center;font-size:13px}
   .cell.field,.select.field{border:1px solid var(--line);background:#fff;padding:9px 10px;border-radius:9px}
   .row.linked .cell.desc{color:var(--accent);font-weight:600}
   .rowdel{border:none;background:transparent;color:var(--muted);font-size:17px;line-height:1;cursor:pointer;border-radius:6px;width:22px;height:22px;opacity:.4;transition:opacity .12s,color .12s}
@@ -60,6 +60,8 @@
   .lockbtn:disabled{opacity:.5;cursor:not-allowed}
   .locklink{background:none;border:none;color:var(--accent);font:inherit;font-size:13px;cursor:pointer;margin-top:14px;text-decoration:underline}
   @media (max-width:560px){.fg2{grid-template-columns:1fr !important}}
+  button[style]:hover{}
+  .recharts-wrapper{font-family:var(--body)}
 </style>
 </head>
 <body>
@@ -68,6 +70,8 @@
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.7/Recharts.min.js"></script>
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
@@ -126,7 +130,7 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 const monthLabel = (k) => { const [y,m]=k.split("-").map(Number); return new Date(y,m-1,1).toLocaleString("en-US",{month:"long",year:"numeric"}); };
 const addMonths = (k,n) => { const [y,m]=k.split("-").map(Number); return monthKey(new Date(y,m-1+n,1)); };
-const blankRow = (desc="") => ({ id: uid(), desc, due:"", planned:0, actual:0 });
+const blankRow = (desc="") => ({ id: uid(), desc, due:"", actual:0 });
 function freshMonth(){ const m={}; for(const c of COLS) m[c]=DEFAULTS[c].map(d=>blankRow(d)); return m; }
 function calcEMI(p, rate, months){ if(months<=0) return 0; const r=rate/100/12; if(r===0) return p/months; return (p*r*Math.pow(1+r,months))/(Math.pow(1+r,months)-1); }
 
@@ -195,8 +199,7 @@ function App() {
   const [months, setMonths] = useState({});
   const [assets, setAssets] = useState([]);
   const [current, setCurrent] = useState(monthKey(new Date()));
-  const [view, setView] = useState("budget");
-  const [valueMode, setValueMode] = useState("planned");
+  const [view, setView] = useState("dashboard");
   const [showBuy, setShowBuy] = useState(false);
   const firstSave = useRef(true);
 
@@ -240,12 +243,12 @@ function App() {
 
   const totals = useMemo(() => {
     const sum=(rows,k)=>rows.reduce((a,r)=>a+(Number(r[k])||0),0);
-    const t={}; for(const c of COLS) t[c]={planned:sum(month[c]||[],"planned"),actual:sum(month[c]||[],"actual")};
+    const t={}; for(const c of COLS) t[c]=sum(month[c]||[],"actual");
     return t;
   }, [month]);
 
-  const incomeTotal = totals.income[valueMode];
-  const spend = { needs: totals.needs[valueMode], wants: totals.wants[valueMode], savings: totals.savings[valueMode] };
+  const incomeTotal = totals.income;
+  const spend = { needs: totals.needs, wants: totals.wants, savings: totals.savings };
   const allocated = spend.needs + spend.wants + spend.savings;
   const left = incomeTotal - allocated;
   const pct = (v) => (allocated > 0 ? (v/allocated)*100 : 0);
@@ -271,8 +274,8 @@ function App() {
     setMonths(prev=>{
       const next={...prev};
       const ensure=(k)=>{ if(!next[k]) next[k]=freshMonth(); else next[k]={...next[k],needs:[...next[k].needs]}; };
-      if(down>0){ ensure(startMonth); next[startMonth].needs.push({id:uid(),desc:`${asset.name} — Down payment`,due:asset.purchaseDate.slice(8,10),planned:down,actual:down,_assetId:asset.id,_kind:"down"}); }
-      for(let i=0;i<tenure;i++){ const k=addMonths(startMonth,i); ensure(k); next[k].needs.push({id:uid(),desc:`${asset.name} EMI (${i+1}/${tenure})`,due:"",planned:emi,actual:emi,_assetId:asset.id,_kind:"emi"}); }
+      if(down>0){ ensure(startMonth); next[startMonth].needs.push({id:uid(),desc:`${asset.name} — Down payment`,due:asset.purchaseDate.slice(8,10),actual:down,_assetId:asset.id,_kind:"down"}); }
+      for(let i=0;i<tenure;i++){ const k=addMonths(startMonth,i); ensure(k); next[k].needs.push({id:uid(),desc:`${asset.name} EMI (${i+1}/${tenure})`,due:"",actual:emi,_assetId:asset.id,_kind:"emi"}); }
       return next;
     });
     setShowBuy(false); setCurrent(startMonth); setView("budget");
@@ -282,6 +285,24 @@ function App() {
     setAssets(prev=>prev.filter(a=>a.id!==assetId));
     setMonths(prev=>{ const next={}; for(const k of Object.keys(prev)){ const m={...prev[k]}; m.needs=m.needs.filter(r=>r._assetId!==assetId); next[k]=m; } return next; });
   },[]);
+
+  // edit: remove old lines for this asset, then re-post with updated values
+  const editAsset = useCallback((assetId, form)=>{
+    const price=Number(form.price)||0, down=Number(form.down)||0, tenure=Number(form.tenure)||0, rate=Number(form.rate)||0;
+    const financed=Math.max(price-down,0);
+    const emi=form.emiOverride?(Number(form.emi)||0):Math.round(calcEMI(financed,rate,tenure));
+    const startMonth=form.startMonth||current;
+    const updated={id:assetId,name:form.name||"Asset",category:form.category||"Electronics",purchaseDate:form.purchaseDate||new Date().toISOString().slice(0,10),price,down,financed,emi,tenure,rate,startMonth};
+    setAssets(prev=>prev.map(a=>a.id===assetId?updated:a));
+    setMonths(prev=>{
+      const next={};
+      for(const k of Object.keys(prev)){ const m={...prev[k]}; m.needs=m.needs.filter(r=>r._assetId!==assetId); next[k]=m; }
+      const ensure=(k)=>{ if(!next[k]) next[k]=freshMonth(); else next[k]={...next[k],needs:[...next[k].needs]}; };
+      if(down>0){ ensure(startMonth); next[startMonth].needs.push({id:uid(),desc:`${updated.name} — Down payment`,due:updated.purchaseDate.slice(8,10),actual:down,_assetId:assetId,_kind:"down"}); }
+      for(let i=0;i<tenure;i++){ const k=addMonths(startMonth,i); ensure(k); next[k].needs.push({id:uid(),desc:`${updated.name} EMI (${i+1}/${tenure})`,due:"",actual:emi,_assetId:assetId,_kind:"emi"}); }
+      return next;
+    });
+  },[current]);
 
   const assetStatus = useCallback((a)=>{
     let paid=0; for(let i=0;i<a.tenure;i++){ if(addMonths(a.startMonth,i)<=current) paid++; }
@@ -326,27 +347,26 @@ function App() {
       <header style={S.header}>
         <div>
           <div style={S.kicker}>Monthly Finances</div>
-          <h1 style={S.h1}>{monthLabel(current)}</h1>
+          <h1 style={S.h1}>{view==="dashboard" ? "Dashboard" : view==="assets" ? "Assets & EMIs" : monthLabel(current)}</h1>
         </div>
         <div style={S.headerControls}>
-          <button className="ghost" onClick={()=>setCurrent(addMonths(current,-1))} aria-label="Previous month">‹</button>
-          <select className="select" value={current} onChange={(e)=>setCurrent(e.target.value)}>
-            {monthList.map(k=><option key={k} value={k}>{monthLabel(k)}</option>)}
-          </select>
-          <button className="ghost" onClick={()=>setCurrent(addMonths(current,1))} aria-label="Next month">›</button>
+          {view==="budget" && <>
+            <button className="ghost" onClick={()=>setCurrent(addMonths(current,-1))} aria-label="Previous month">‹</button>
+            <select className="select" value={current} onChange={(e)=>setCurrent(e.target.value)}>
+              {monthList.map(k=><option key={k} value={k}>{monthLabel(k)}</option>)}
+            </select>
+            <button className="ghost" onClick={()=>setCurrent(addMonths(current,1))} aria-label="Next month">›</button>
+          </>}
           <button className="ghost" title="Lock now" onClick={()=>location.reload()}>🔒</button>
         </div>
       </header>
 
       <nav style={S.tabs}>
+        <button className={view==="dashboard"?"tab on":"tab"} onClick={()=>setView("dashboard")}>Dashboard</button>
         <button className={view==="budget"?"tab on":"tab"} onClick={()=>setView("budget")}>Budget</button>
         <button className={view==="assets"?"tab on":"tab"} onClick={()=>setView("assets")}>Assets &amp; EMIs</button>
         <div style={{flex:1}} />
         {view==="budget" && <>
-          <div className="seg">
-            <button className={valueMode==="planned"?"on":""} onClick={()=>setValueMode("planned")}>Planned</button>
-            <button className={valueMode==="actual"?"on":""} onClick={()=>setValueMode("actual")}>Actual</button>
-          </div>
           <button className="ghost small" onClick={copyPrev} title="Copy last month's lines into this month">Copy last month</button>
         </>}
         <button className="ghost small" onClick={doExport}>Export</button>
@@ -356,7 +376,8 @@ function App() {
         <button className="primary" onClick={()=>setShowBuy(true)}>+ Buy asset</button>
       </nav>
 
-      {view==="budget" ? <>
+      {view==="dashboard" ? <Dashboard months={months} assets={assets} status={assetStatus} goto={(v,m)=>{ if(m) setCurrent(m); setView(v); }} />
+       : view==="budget" ? <>
         <section style={S.summary}>
           <Stat label="Income" value={incomeTotal} tint="var(--income)" />
           <Stat label="Needs" value={spend.needs} sub={`${pct(spend.needs).toFixed(0)}%`} tint="var(--needs)" />
@@ -366,13 +387,285 @@ function App() {
         </section>
         <Bar needs={spend.needs} wants={spend.wants} savings={spend.savings} total={allocated} />
         <section style={S.grid}>
-          {COLS.map(c=><BudgetColumn key={c} col={c} rows={month[c]||[]} total={totals[c]} valueMode={valueMode} onEdit={editRow} onAdd={addRow} onDel={delRow} />)}
+          {COLS.map(c=><BudgetColumn key={c} col={c} rows={month[c]||[]} total={totals[c]} onEdit={editRow} onAdd={addRow} onDel={delRow} />)}
         </section>
-      </> : <AssetsView assets={assets} status={assetStatus} onDelete={deleteAsset} onBuy={()=>setShowBuy(true)} />}
+      </> : <AssetsView assets={assets} status={assetStatus} onDelete={deleteAsset} onEdit={(a)=>setShowBuy(a)} onBuy={()=>setShowBuy(true)} />}
 
-      {showBuy && <BuyModal onClose={()=>setShowBuy(false)} onSubmit={buyAsset} defaultMonth={current} />}
+      {showBuy && <BuyModal
+        onClose={()=>setShowBuy(false)}
+        onSubmit={(form)=>{ if(showBuy && showBuy.id){ editAsset(showBuy.id, form); setShowBuy(false); } else { buyAsset(form); } }}
+        defaultMonth={current}
+        editing={showBuy && showBuy.id ? showBuy : null} />}
     </div>
   );
+}
+
+const RC = window.Recharts || {};
+const CHART_COLORS = { income:"#2f9e6f", needs:"#d9762b", wants:"#c2477e", savings:"#3a6ea5", accent:"#6d5bd0" };
+
+function sumCol(monthObj, col){ return (monthObj?.[col]||[]).reduce((a,r)=>a+(Number(r.actual)||0),0); }
+
+function Dashboard({ months, assets, status, goto }){
+  const todayKey = monthKey(new Date());
+  const keys = Object.keys(months).sort();
+  const elapsedKeys = keys.filter(k=>k<=todayKey);
+
+  // consolidated totals (only count months up to & including current real month)
+  const agg = useMemo(()=>{
+    let income=0,needs=0,wants=0,savings=0;
+    for(const k of elapsedKeys){
+      income+=sumCol(months[k],"income");
+      needs+=sumCol(months[k],"needs");
+      wants+=sumCol(months[k],"wants");
+      savings+=sumCol(months[k],"savings");
+    }
+    return {income,needs,wants,savings,spent:needs+wants,outflow:needs+wants+savings};
+  },[months,elapsedKeys.join(",")]);
+
+  const assetValue = assets.reduce((a,x)=>a+(Number(x.price)||0),0);
+  const outstanding = assets.reduce((a,x)=>a+status(x).remaining,0);
+  const monthlyEmi = assets.reduce((a,x)=>a+(status(x).remainingMonths>0?x.emi:0),0);
+
+  // net position: cumulative savings + asset value - outstanding debt
+  const netPosition = agg.savings + assetValue - outstanding;
+  const savingsRate = agg.income>0 ? (agg.savings/agg.income)*100 : 0;
+  const moneyLeft = agg.income - agg.outflow;
+
+  // monthly trend series (all months, future included so you can see scheduled EMIs)
+  const trend = keys.map(k=>({
+    name: monthLabel(k).replace(/ \d+$/, m=>"'"+m.trim().slice(2)),
+    Income: sumCol(months[k],"income"),
+    Spending: sumCol(months[k],"needs")+sumCol(months[k],"wants"),
+    Savings: sumCol(months[k],"savings"),
+  }));
+
+  // category breakdown across elapsed months (top needs+wants line items)
+  const catMap = {};
+  for(const k of elapsedKeys){
+    for(const col of ["needs","wants"]){
+      for(const r of (months[k]?.[col]||[])){
+        const amt=Number(r.actual)||0; if(amt<=0) continue;
+        const label=(r.desc||"Other").replace(/ EMI \(\d+\/\d+\)$/,"").replace(/ — Down payment$/,"");
+        catMap[label]=(catMap[label]||0)+amt;
+      }
+    }
+  }
+  const topCats = Object.entries(catMap).map(([name,value])=>({name,value})).sort((a,b)=>b.value-a.value).slice(0,7);
+
+  // allocation pie (elapsed)
+  const allocPie = [
+    {name:"Needs",value:agg.needs,fill:CHART_COLORS.needs},
+    {name:"Wants",value:agg.wants,fill:CHART_COLORS.wants},
+    {name:"Savings",value:agg.savings,fill:CHART_COLORS.savings},
+  ].filter(d=>d.value>0);
+
+  // upcoming EMI commitments (next 6 months)
+  const upcoming = [];
+  for(let i=0;i<6;i++){
+    const k=addMonths(todayKey,i);
+    let due=0; const items=[];
+    for(const a of assets){
+      for(let j=0;j<a.tenure;j++){ if(addMonths(a.startMonth,j)===k){ due+=a.emi; items.push(a.name); } }
+    }
+    if(due>0) upcoming.push({month:k,due,items});
+  }
+
+  // financial health score (0-100): savings rate, EMI burden, surplus
+  const avgIncome = elapsedKeys.length? agg.income/elapsedKeys.length : 0;
+  const emiBurden = avgIncome>0 ? (monthlyEmi/avgIncome)*100 : 0;
+  let score = 0;
+  score += Math.min(savingsRate/20,1)*40;            // up to 40 for 20%+ savings
+  score += Math.max(0,1-emiBurden/40)*30;             // up to 30, penalised as EMI nears 40% of income
+  score += moneyLeft>=0 ? 30 : Math.max(0,30+moneyLeft/Math.max(agg.income,1)*30); // 30 if not overspending
+  score = Math.round(Math.max(0,Math.min(100,score)));
+  const scoreband = score>=75?{t:"Healthy",c:"var(--income)"}:score>=50?{t:"Okay",c:"var(--needs)"}:{t:"Needs attention",c:"var(--danger)"};
+
+  const insights = buildInsights({savingsRate,emiBurden,moneyLeft,agg,assets,outstanding,elapsedKeys});
+
+  const hasData = elapsedKeys.length>0 && agg.income+agg.spent>0;
+  const Chart = RC.ResponsiveContainer;
+
+  return (
+    <div>
+      {/* hero consolidated stats */}
+      <section style={S.summary}>
+        <BigStat label="Salary / income received" value={agg.income} tint="var(--income)" icon="💰" />
+        <BigStat label="Invested / saved so far" value={agg.savings} tint="var(--savings)" icon="📈" sub={`${savingsRate.toFixed(0)}% of income`} />
+        <BigStat label="Total spent" value={agg.spent} tint="var(--needs)" icon="🛒" />
+        <BigStat label="Net position" value={netPosition} tint={netPosition>=0?"var(--accent)":"var(--danger)"} icon="🪙" sub="savings + assets − debt" />
+      </section>
+
+      <section style={S.dashRow2}>
+        <MiniStat label="Money left over" value={moneyLeft} tint={moneyLeft>=0?"var(--income)":"var(--danger)"} />
+        <MiniStat label="Asset value" value={assetValue} tint="var(--savings)" />
+        <MiniStat label="Outstanding EMI" value={outstanding} tint="var(--danger)" />
+        <MiniStat label="EMIs / month" value={monthlyEmi} tint="var(--needs)" />
+        <MiniStat label="Assets owned" value={assets.length} tint="var(--ink)" raw />
+        <MiniStat label="Months tracked" value={elapsedKeys.length} tint="var(--ink)" raw />
+      </section>
+
+      {!hasData ? (
+        <div style={S.empty}>
+          <p style={{margin:0,fontWeight:600}}>No data yet to chart.</p>
+          <p style={{marginTop:6,color:"var(--muted)"}}>Add some income and expenses in the Budget tab, or buy an asset — your dashboard fills in automatically.</p>
+          <button className="primary" style={{marginTop:12}} onClick={()=>goto("budget")}>Go to Budget</button>
+        </div>
+      ) : (
+        <>
+          {/* financial health score */}
+          <div style={S.scoreCard}>
+            <div style={S.scoreRing}>
+              <Ring value={score} color={scoreband.c} />
+              <div style={S.scoreInner}>
+                <div style={{...S.scoreNum,color:scoreband.c}}>{score}</div>
+                <div style={S.scoreLabel}>{scoreband.t}</div>
+              </div>
+            </div>
+            <div style={{flex:1,minWidth:220}}>
+              <h3 style={S.cardTitle}>Financial health</h3>
+              <div style={S.healthBars}>
+                <HealthBar label="Savings rate" pct={Math.min(savingsRate/20*100,100)} note={`${savingsRate.toFixed(0)}% (target 20%)`} color="var(--savings)" />
+                <HealthBar label="EMI burden" pct={Math.min(emiBurden/40*100,100)} note={`${emiBurden.toFixed(0)}% of income (keep < 40%)`} color={emiBurden>40?"var(--danger)":"var(--needs)"} invert />
+                <HealthBar label="Living within means" pct={moneyLeft>=0?100:0} note={moneyLeft>=0?"Spending under income":"Overspending"} color={moneyLeft>=0?"var(--income)":"var(--danger)"} />
+              </div>
+            </div>
+          </div>
+
+          {/* trend chart */}
+          <Card title="Income, spending & savings over time">
+            {!Chart && <NoChart/>}
+            {Chart && <Chart width="100%" height={260}>
+              <RC.AreaChart data={trend} margin={{top:10,right:10,left:0,bottom:0}}>
+                <defs>
+                  <linearGradient id="gI" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={CHART_COLORS.income} stopOpacity={0.35}/><stop offset="100%" stopColor={CHART_COLORS.income} stopOpacity={0}/></linearGradient>
+                  <linearGradient id="gS" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={CHART_COLORS.needs} stopOpacity={0.35}/><stop offset="100%" stopColor={CHART_COLORS.needs} stopOpacity={0}/></linearGradient>
+                  <linearGradient id="gV" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={CHART_COLORS.savings} stopOpacity={0.35}/><stop offset="100%" stopColor={CHART_COLORS.savings} stopOpacity={0}/></linearGradient>
+                </defs>
+                <RC.CartesianGrid strokeDasharray="3 3" stroke="var(--line)" vertical={false}/>
+                <RC.XAxis dataKey="name" tick={{fontSize:11,fill:"var(--muted)"}} axisLine={false} tickLine={false}/>
+                <RC.YAxis tick={{fontSize:11,fill:"var(--muted)"}} axisLine={false} tickLine={false} tickFormatter={(v)=>v>=1000?(v/1000)+"k":v}/>
+                <RC.Tooltip formatter={(v)=>INR(v)} contentStyle={{borderRadius:10,border:"1px solid var(--line)",fontSize:13}}/>
+                <RC.Legend wrapperStyle={{fontSize:12}}/>
+                <RC.Area type="monotone" dataKey="Income" stroke={CHART_COLORS.income} fill="url(#gI)" strokeWidth={2}/>
+                <RC.Area type="monotone" dataKey="Spending" stroke={CHART_COLORS.needs} fill="url(#gS)" strokeWidth={2}/>
+                <RC.Area type="monotone" dataKey="Savings" stroke={CHART_COLORS.savings} fill="url(#gV)" strokeWidth={2}/>
+              </RC.AreaChart>
+            </Chart>}
+          </Card>
+
+          <div style={S.chartGrid}>
+            <Card title="Where your money goes">
+              {Chart && allocPie.length>0 && <Chart width="100%" height={240}>
+                <RC.PieChart>
+                  <RC.Pie data={allocPie} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={2}>
+                    {allocPie.map((d,i)=><RC.Cell key={i} fill={d.fill}/>)}
+                  </RC.Pie>
+                  <RC.Tooltip formatter={(v)=>INR(v)} contentStyle={{borderRadius:10,border:"1px solid var(--line)",fontSize:13}}/>
+                  <RC.Legend wrapperStyle={{fontSize:12}}/>
+                </RC.PieChart>
+              </Chart>}
+            </Card>
+            <Card title="Top spending categories">
+              {Chart && topCats.length>0 && <Chart width="100%" height={240}>
+                <RC.BarChart data={topCats} layout="vertical" margin={{left:8,right:16,top:4,bottom:4}}>
+                  <RC.XAxis type="number" hide/>
+                  <RC.YAxis type="category" dataKey="name" width={110} tick={{fontSize:11,fill:"var(--ink)"}} axisLine={false} tickLine={false}/>
+                  <RC.Tooltip formatter={(v)=>INR(v)} contentStyle={{borderRadius:10,border:"1px solid var(--line)",fontSize:13}}/>
+                  <RC.Bar dataKey="value" radius={[0,6,6,0]} fill={CHART_COLORS.accent}/>
+                </RC.BarChart>
+              </Chart>}
+            </Card>
+          </div>
+
+          {/* upcoming EMI commitments */}
+          {upcoming.length>0 && (
+            <Card title="Upcoming EMI commitments (next 6 months)">
+              <div style={S.upcoming}>
+                {upcoming.map(u=>(
+                  <button key={u.month} style={S.upChip} onClick={()=>goto("budget",u.month)} title={u.items.join(", ")}>
+                    <div style={S.upMonth}>{monthLabel(u.month)}</div>
+                    <div style={S.upDue}>{INR(u.due)}</div>
+                    <div style={S.upItems}>{u.items.length} EMI{u.items.length>1?"s":""}</div>
+                  </button>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {/* insights */}
+          <Card title="Insights">
+            <div style={S.insights}>
+              {insights.map((it,i)=>(
+                <div key={i} style={S.insightRow}>
+                  <span style={{fontSize:18}}>{it.icon}</span>
+                  <span style={{fontSize:14,lineHeight:1.5}}>{it.text}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}
+
+function buildInsights({savingsRate,emiBurden,moneyLeft,agg,assets,outstanding,elapsedKeys}){
+  const out=[];
+  if(agg.income===0){ return [{icon:"👋",text:"Add your income and expenses to start seeing personalised insights."}]; }
+  if(savingsRate>=20) out.push({icon:"🌟",text:`You're saving ${savingsRate.toFixed(0)}% of your income — at or above the classic 20% target. Excellent discipline.`});
+  else if(savingsRate>0) out.push({icon:"🎯",text:`Your savings rate is ${savingsRate.toFixed(0)}%. Nudging it toward 20% would strengthen your long-term position.`});
+  else out.push({icon:"⚠️",text:"No savings recorded yet. Even a small automatic transfer each month builds momentum."});
+
+  if(emiBurden>40) out.push({icon:"🔴",text:`EMIs take up about ${emiBurden.toFixed(0)}% of your average income — above the 40% comfort line. New debt would stretch you thin.`});
+  else if(emiBurden>0) out.push({icon:"✅",text:`EMI burden is a manageable ${emiBurden.toFixed(0)}% of income.`});
+
+  if(moneyLeft<0) out.push({icon:"📉",text:`Across tracked months you've spent ${INR(-moneyLeft)} more than you earned. Worth reviewing the Wants categories.`});
+  else out.push({icon:"💪",text:`You've kept ${INR(moneyLeft)} of cumulative income unspent. That's real breathing room.`});
+
+  if(outstanding>0){ const big=[...assets].sort((a,b)=>b.emi-a.emi)[0]; if(big) out.push({icon:"🏦",text:`${INR(outstanding)} of EMI debt remains. Your largest is "${big.name}" at ${INR(big.emi)}/month.`}); }
+  if(assets.length>0){ const v=assets.reduce((a,x)=>a+x.price,0); out.push({icon:"🏷️",text:`You own ${assets.length} tracked asset${assets.length>1?"s":""} worth ${INR(v)} in total.`}); }
+  const avgSpend = elapsedKeys.length? (agg.spent/elapsedKeys.length):0;
+  if(avgSpend>0) out.push({icon:"📊",text:`Your average monthly spend is about ${INR(avgSpend)} across ${elapsedKeys.length} month${elapsedKeys.length>1?"s":""}.`});
+  return out;
+}
+
+function Ring({value,color}){
+  const r=52,c=2*Math.PI*r,off=c-(value/100)*c;
+  return <svg width="130" height="130" viewBox="0 0 130 130">
+    <circle cx="65" cy="65" r={r} fill="none" stroke="var(--line)" strokeWidth="11"/>
+    <circle cx="65" cy="65" r={r} fill="none" stroke={color} strokeWidth="11" strokeLinecap="round"
+      strokeDasharray={c} strokeDashoffset={off} transform="rotate(-90 65 65)" style={{transition:"stroke-dashoffset .6s ease"}}/>
+  </svg>;
+}
+function HealthBar({label,pct,note,color}){
+  return <div style={{marginBottom:12}}>
+    <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
+      <span style={{fontWeight:600}}>{label}</span><span style={{color:"var(--muted)"}}>{note}</span>
+    </div>
+    <div style={{height:8,background:"var(--line)",borderRadius:6,overflow:"hidden"}}>
+      <div style={{height:"100%",width:`${Math.max(2,Math.min(100,pct))}%`,background:color,transition:"width .5s"}}/>
+    </div>
+  </div>;
+}
+function BigStat({label,value,tint,icon,sub}){
+  return <div style={S.bigStat}>
+    <div style={S.bigIcon}>{icon}</div>
+    <div style={S.statLabel}>{label}</div>
+    <div style={{...S.bigVal,color:tint}}>{INR(value)}</div>
+    {sub && <div style={S.statSub}>{sub}</div>}
+  </div>;
+}
+function MiniStat({label,value,tint,raw}){
+  return <div style={S.miniStat}>
+    <div style={S.miniLabel}>{label}</div>
+    <div style={{...S.miniVal,color:tint}}>{raw?value:INR(value)}</div>
+  </div>;
+}
+function Card({title,children}){
+  return <div style={S.bigCard}><h3 style={S.cardTitle}>{title}</h3>{children}</div>;
+}
+function NoChart(){
+  return <div style={{padding:"30px 0",textAlign:"center",color:"var(--muted)",fontSize:13}}>Charts couldn't load (offline or blocked). Your numbers above are still accurate.</div>;
 }
 
 function Stat({label,value,sub,tint}){
@@ -397,21 +690,20 @@ function Bar({needs,wants,savings,total}){
     </div>
   </div>;
 }
-function BudgetColumn({col,rows,total,valueMode,onEdit,onAdd,onDel}){
+function BudgetColumn({col,rows,total,onEdit,onAdd,onDel}){
   const meta=COL_META[col];
   return <div style={S.column}>
     <div style={{...S.colHead,borderColor:meta.tint}}>
       <span style={{...S.colDot,background:meta.tint}} />
       <h3 style={S.colTitle}>{meta.label}</h3>
-      <span style={S.colTotal}>{INR(total[valueMode])}</span>
+      <span style={S.colTotal}>{INR(total)}</span>
     </div>
-    <div style={S.rowHead}><span>Description</span><span style={{textAlign:"center"}}>Due</span><span style={{textAlign:"right"}}>Planned</span><span style={{textAlign:"right"}}>Actual</span><span /></div>
+    <div style={S.rowHead}><span>Description</span><span style={{textAlign:"center"}}>Due</span><span style={{textAlign:"right"}}>Amount</span><span /></div>
     <div>
       {rows.map(r=>(
         <div key={r.id} style={S.row} className={r._assetId?"row linked":"row"}>
-          <input className="cell desc" value={r.desc} placeholder="—" onChange={(e)=>onEdit(col,r.id,"desc",e.target.value)} title={r._assetId?"Linked to an asset":""} />
+          <input className="cell desc" value={r.desc} placeholder="—" onChange={(e)=>onEdit(col,r.id,"desc",e.target.value)} title={r.desc || (r._assetId?"Linked to an asset":"")} />
           <input className="cell due" value={r.due} placeholder="–" onChange={(e)=>onEdit(col,r.id,"due",e.target.value)} />
-          <input className="cell num" type="number" value={r.planned||""} placeholder="0" onChange={(e)=>onEdit(col,r.id,"planned",e.target.value)} />
           <input className="cell num" type="number" value={r.actual||""} placeholder="0" onChange={(e)=>onEdit(col,r.id,"actual",e.target.value)} />
           <button className="rowdel" onClick={()=>onDel(col,r.id)} aria-label="Delete line">×</button>
         </div>
@@ -420,15 +712,31 @@ function BudgetColumn({col,rows,total,valueMode,onEdit,onAdd,onDel}){
     <button className="addrow" onClick={()=>onAdd(col)}>+ Add line</button>
   </div>;
 }
-function AssetsView({assets,status,onDelete,onBuy}){
+function AssetsView({assets,status,onDelete,onEdit,onBuy}){
+  const [sort,setSort] = useState("value");
+  const [confirmDel,setConfirmDel] = useState(null); // asset pending deletion
+
   const totalValue=assets.reduce((a,x)=>a+(Number(x.price)||0),0);
   const totalOwed=assets.reduce((a,x)=>a+status(x).remaining,0);
+  const totalPaid=assets.reduce((a,x)=>{ const s=status(x); return a+x.emi*s.paid; },0);
+
+  const sorted = [...assets].sort((a,b)=>{
+    if(sort==="value") return b.price-a.price;
+    if(sort==="emi") return b.emi-a.emi;
+    if(sort==="outstanding") return status(b).remaining-status(a).remaining;
+    if(sort==="name") return a.name.localeCompare(b.name);
+    if(sort==="date") return (b.purchaseDate||"").localeCompare(a.purchaseDate||"");
+    return 0;
+  });
+
   return <div>
     <section style={S.summary}>
       <Stat label="Assets owned" value={assets.length} tint="var(--ink)" />
       <Stat label="Total asset value" value={totalValue} tint="var(--savings)" />
+      <Stat label="Paid off so far" value={totalPaid} tint="var(--income)" />
       <Stat label="Outstanding EMI" value={totalOwed} tint="var(--danger)" />
     </section>
+
     {assets.length===0 ? (
       <div style={S.empty}>
         <p style={{margin:0,fontWeight:600}}>No assets yet.</p>
@@ -436,44 +744,85 @@ function AssetsView({assets,status,onDelete,onBuy}){
         <button className="primary" onClick={onBuy} style={{marginTop:12}}>+ Buy asset</button>
       </div>
     ) : (
-      <div style={S.assetGrid}>
-        {assets.map(a=>{
-          const s=status(a); const progress=a.tenure>0?(s.paid/a.tenure)*100:100;
-          return <div key={a.id} style={S.assetCard}>
-            <div style={S.assetTop}>
-              <div><div style={S.assetName}>{a.name}</div><div style={S.assetMeta}>{a.category} · bought {a.purchaseDate}</div></div>
-              <button className="rowdel" onClick={()=>onDelete(a.id)} title="Remove asset & its EMI lines">×</button>
-            </div>
-            <div style={S.assetValue}>{INR(a.price)}</div>
-            <div style={S.assetRows}>
-              <AR k="Down payment" v={INR(a.down)} />
-              <AR k="Financed" v={INR(a.financed)} />
-              <AR k="Monthly EMI" v={INR(a.emi)} />
-              <AR k="Tenure" v={`${a.tenure} mo @ ${a.rate}%`} />
-              <AR k="Outstanding" v={INR(s.remaining)} strong />
-            </div>
-            {a.tenure>0 && <>
-              <div style={S.assetBar}><span style={{display:"block",height:"100%",width:`${progress}%`,background:"var(--accent)"}} /></div>
-              <div style={S.assetProg}>{s.paid}/{a.tenure} paid · {s.remainingMonths} left</div>
-            </>}
-          </div>;
-        })}
+      <>
+        <div style={S.assetToolbar}>
+          <span style={{fontSize:13,color:"var(--muted)"}}>Sort by</span>
+          <select className="select" style={{padding:"6px 10px",fontSize:13}} value={sort} onChange={(e)=>setSort(e.target.value)}>
+            <option value="value">Value (high → low)</option>
+            <option value="emi">Monthly EMI</option>
+            <option value="outstanding">Outstanding</option>
+            <option value="date">Purchase date</option>
+            <option value="name">Name</option>
+          </select>
+        </div>
+        <div style={S.assetGrid}>
+          {sorted.map(a=>{
+            const s=status(a);
+            const progress=a.tenure>0?(s.paid/a.tenure)*100:100;
+            const totalInterest=Math.max(a.emi*a.tenure-a.financed,0);
+            const payoff = a.tenure>0 ? monthLabel(addMonths(a.startMonth,a.tenure-1)) : "—";
+            const done = a.tenure>0 && s.remainingMonths===0;
+            return <div key={a.id} style={{...S.assetCard, ...(done?{borderColor:"var(--income)"}:{})}}>
+              <div style={S.assetTop}>
+                <div>
+                  <div style={S.assetName}>{a.name} {done && <span style={S.paidTag}>PAID OFF</span>}</div>
+                  <div style={S.assetMeta}>{a.category} · bought {a.purchaseDate}</div>
+                </div>
+              </div>
+              <div style={S.assetValue}>{INR(a.price)}</div>
+              <div style={S.assetRows}>
+                <AR k="Down payment" v={INR(a.down)} />
+                <AR k="Financed" v={INR(a.financed)} />
+                <AR k="Monthly EMI" v={INR(a.emi)} />
+                <AR k="Tenure" v={`${a.tenure} mo @ ${a.rate}%`} />
+                <AR k="Total interest" v={INR(totalInterest)} />
+                <AR k="Payoff month" v={payoff} />
+                <AR k="Outstanding" v={INR(s.remaining)} strong />
+              </div>
+              {a.tenure>0 && <>
+                <div style={S.assetBar}><span style={{display:"block",height:"100%",width:`${progress}%`,background:done?"var(--income)":"var(--accent)"}} /></div>
+                <div style={S.assetProg}>{s.paid}/{a.tenure} paid · {s.remainingMonths} left</div>
+              </>}
+              <div style={{display:"flex",gap:8,marginTop:12}}>
+                <button className="ghost small" style={{flex:1}} onClick={()=>onEdit(a)}>Edit</button>
+                <button className="ghost small" style={{flex:1,color:"var(--danger)"}} onClick={()=>setConfirmDel(a)}>Delete</button>
+              </div>
+            </div>;
+          })}
+        </div>
+      </>
+    )}
+
+    {confirmDel && (
+      <div style={S.modalWrap} onClick={()=>setConfirmDel(null)}>
+        <div style={{...S.modal,maxWidth:420}} onClick={(e)=>e.stopPropagation()}>
+          <div style={S.modalHead}><h3 style={{margin:0}}>Delete asset?</h3></div>
+          <p style={{fontSize:14,color:"var(--ink)",lineHeight:1.55,marginTop:10}}>
+            This permanently removes <b>{confirmDel.name}</b> and all of its EMI and down-payment lines from every month in your budget. This can't be undone.
+          </p>
+          <div style={S.modalActions}>
+            <button className="ghost" onClick={()=>setConfirmDel(null)}>Cancel</button>
+            <button className="primary" style={{background:"var(--danger)"}} onClick={()=>{ onDelete(confirmDel.id); setConfirmDel(null); }}>Delete it</button>
+          </div>
+        </div>
       </div>
     )}
   </div>;
 }
 const AR=({k,v,strong})=>(<div style={S.ar}><span style={S.arK}>{k}</span><span style={{...S.arV,fontWeight:strong?700:500}}>{v}</span></div>);
 
-function BuyModal({onClose,onSubmit,defaultMonth}){
-  const [f,setF]=useState({name:"",category:"Electronics",purchaseDate:new Date().toISOString().slice(0,10),price:"",down:"",tenure:"12",rate:"12",startMonth:defaultMonth,emiOverride:false,emi:""});
+function BuyModal({onClose,onSubmit,defaultMonth,editing}){
+  const [f,setF]=useState(editing
+    ? {name:editing.name,category:editing.category,purchaseDate:editing.purchaseDate,price:String(editing.price||""),down:String(editing.down||""),tenure:String(editing.tenure||"0"),rate:String(editing.rate||"0"),startMonth:editing.startMonth,emiOverride:false,emi:String(editing.emi||"")}
+    : {name:"",category:"Electronics",purchaseDate:new Date().toISOString().slice(0,10),price:"",down:"",tenure:"12",rate:"12",startMonth:defaultMonth,emiOverride:false,emi:""});
   const set=(k)=>(e)=>setF({...f,[k]:e.target.value});
   const financed=Math.max((Number(f.price)||0)-(Number(f.down)||0),0);
   const autoEmi=Math.round(calcEMI(financed,Number(f.rate)||0,Number(f.tenure)||0));
   const shownEmi=f.emiOverride?(Number(f.emi)||0):autoEmi;
   return <div style={S.modalWrap} onClick={onClose}>
     <div style={S.modal} onClick={(e)=>e.stopPropagation()}>
-      <div style={S.modalHead}><h3 style={{margin:0}}>Buy an asset</h3><button className="rowdel" onClick={onClose}>×</button></div>
-      <p style={S.modalNote}>This registers the asset and posts its down payment + monthly EMIs into your <b>Needs</b> budget automatically.</p>
+      <div style={S.modalHead}><h3 style={{margin:0}}>{editing?"Edit asset":"Buy an asset"}</h3><button className="rowdel" style={{opacity:1}} onClick={onClose}>×</button></div>
+      <p style={S.modalNote}>{editing?"Updating recalculates and re-posts this asset's EMI lines across the affected months.":"This registers the asset and posts its down payment + monthly EMIs into your "}{!editing && <b>Needs</b>}{!editing && " budget automatically."}</p>
       <div className="fg2" style={S.formGrid}>
         <Field label="Item name" full><input className="cell field" value={f.name} placeholder="e.g. iPhone 16 Pro" onChange={set("name")} /></Field>
         <Field label="Category"><select className="select field" value={f.category} onChange={set("category")}>{["Electronics","Vehicle","Property","Appliance","Furniture","Other"].map(c=><option key={c}>{c}</option>)}</select></Field>
@@ -493,7 +842,7 @@ function BuyModal({onClose,onSubmit,defaultMonth}){
       <div style={S.emiPreview}>Financed {INR(financed)} · {f.tenure||0} months · total to pay {INR(shownEmi*(Number(f.tenure)||0)+(Number(f.down)||0))}</div>
       <div style={S.modalActions}>
         <button className="ghost" onClick={onClose}>Cancel</button>
-        <button className="primary" onClick={()=>onSubmit(f)} disabled={!f.name||!f.price}>Add asset &amp; post EMIs</button>
+        <button className="primary" onClick={()=>onSubmit(f)} disabled={!f.name||!f.price}>{editing?"Save changes":"Add asset & post EMIs"}</button>
       </div>
     </div>
   </div>;
@@ -515,14 +864,14 @@ const S = {
   barWrap:{marginBottom:22},
   bar:{display:"flex",height:14,borderRadius:8,overflow:"hidden",background:"var(--line)"},
   barLegend:{display:"flex",gap:18,marginTop:8,fontSize:12,color:"var(--muted)",flexWrap:"wrap"},
-  grid:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:16},
+  grid:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(320px,1fr))",gap:16},
   column:{background:"var(--card)",border:"1px solid var(--line)",borderRadius:16,padding:14,display:"flex",flexDirection:"column"},
   colHead:{display:"flex",alignItems:"center",gap:8,paddingBottom:10,marginBottom:8,borderBottom:"2px solid"},
   colDot:{width:10,height:10,borderRadius:3},
   colTitle:{margin:0,fontSize:17,fontWeight:700,flex:1,fontFamily:"var(--display)"},
   colTotal:{fontFamily:"var(--mono)",fontWeight:700,fontSize:14},
-  rowHead:{display:"grid",gridTemplateColumns:"1fr 36px 70px 70px 20px",gap:4,fontSize:10,textTransform:"uppercase",letterSpacing:.5,color:"var(--muted)",padding:"0 2px 4px",fontFamily:"var(--mono)"},
-  row:{display:"grid",gridTemplateColumns:"1fr 36px 70px 70px 20px",gap:4,alignItems:"center",marginBottom:2},
+  rowHead:{display:"grid",gridTemplateColumns:"minmax(0,1fr) 44px 84px 24px",gap:6,fontSize:10,textTransform:"uppercase",letterSpacing:.5,color:"var(--muted)",padding:"0 4px 6px",fontFamily:"var(--mono)"},
+  row:{display:"grid",gridTemplateColumns:"minmax(0,1fr) 44px 84px 24px",gap:6,alignItems:"center",marginBottom:4},
   empty:{background:"var(--card)",border:"1px dashed var(--line)",borderRadius:16,padding:36,textAlign:"center"},
   assetGrid:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:16},
   assetCard:{background:"var(--card)",border:"1px solid var(--line)",borderRadius:16,padding:16},
@@ -548,6 +897,31 @@ const S = {
   emiCalc:{fontSize:14},
   emiPreview:{fontSize:12,color:"var(--muted)",marginTop:10,fontFamily:"var(--mono)"},
   modalActions:{display:"flex",justifyContent:"flex-end",gap:10,marginTop:18},
+  dashRow2:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:18},
+  bigStat:{background:"var(--card)",border:"1px solid var(--line)",borderRadius:16,padding:"16px 18px",position:"relative",overflow:"hidden"},
+  bigIcon:{fontSize:22,marginBottom:6},
+  bigVal:{fontSize:26,fontWeight:800,marginTop:2,fontFamily:"var(--display)",lineHeight:1.1},
+  miniStat:{background:"var(--card)",border:"1px solid var(--line)",borderRadius:12,padding:"11px 13px"},
+  miniLabel:{fontSize:11,color:"var(--muted)",fontFamily:"var(--mono)",textTransform:"uppercase",letterSpacing:.4},
+  miniVal:{fontSize:18,fontWeight:700,marginTop:3,fontFamily:"var(--display)"},
+  bigCard:{background:"var(--card)",border:"1px solid var(--line)",borderRadius:16,padding:18,marginBottom:16},
+  cardTitle:{margin:"0 0 14px",fontSize:15,fontWeight:700,fontFamily:"var(--display)"},
+  chartGrid:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:16},
+  scoreCard:{background:"var(--card)",border:"1px solid var(--line)",borderRadius:16,padding:18,marginBottom:16,display:"flex",gap:24,alignItems:"center",flexWrap:"wrap"},
+  scoreRing:{position:"relative",width:130,height:130,flexShrink:0},
+  scoreInner:{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"},
+  scoreNum:{fontSize:34,fontWeight:800,fontFamily:"var(--display)",lineHeight:1},
+  scoreLabel:{fontSize:11,color:"var(--muted)",fontFamily:"var(--mono)",textTransform:"uppercase",letterSpacing:.5,marginTop:2},
+  healthBars:{marginTop:4},
+  upcoming:{display:"flex",gap:10,overflowX:"auto",paddingBottom:4},
+  upChip:{flexShrink:0,background:"var(--bg)",border:"1px solid var(--line)",borderRadius:12,padding:"12px 16px",cursor:"pointer",textAlign:"left",minWidth:120,transition:"border-color .12s,transform .12s",font:"inherit"},
+  upMonth:{fontSize:12,color:"var(--muted)",fontFamily:"var(--mono)"},
+  upDue:{fontSize:18,fontWeight:800,fontFamily:"var(--display)",margin:"4px 0 2px",color:"var(--needs)"},
+  upItems:{fontSize:11,color:"var(--muted)"},
+  insights:{display:"flex",flexDirection:"column",gap:12},
+  insightRow:{display:"flex",gap:12,alignItems:"flex-start"},
+  assetToolbar:{display:"flex",alignItems:"center",gap:10,marginBottom:14},
+  paidTag:{fontSize:10,fontWeight:700,color:"var(--income)",border:"1px solid var(--income)",borderRadius:6,padding:"1px 6px",marginLeft:6,verticalAlign:"middle",fontFamily:"var(--mono)"},
 };
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
