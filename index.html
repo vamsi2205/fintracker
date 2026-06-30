@@ -26,7 +26,6 @@
   .cell:hover{background:#fff;border-color:var(--line)}
   .cell:focus{outline:none;border-color:var(--accent);background:#fff;text-overflow:clip}
   .cell.num{text-align:right;font-family:var(--mono);font-size:13px}
-  .cell.due{text-align:center;font-size:13px}
   .cell.field,.select.field{border:1px solid var(--line);background:#fff;padding:9px 10px;border-radius:9px}
   .row.linked .cell.desc{color:var(--accent);font-weight:600}
   .rowdel{border:none;background:transparent;color:var(--muted);font-size:17px;line-height:1;cursor:pointer;border-radius:6px;width:22px;height:22px;opacity:.4;transition:opacity .12s,color .12s}
@@ -62,6 +61,20 @@
   @media (max-width:560px){.fg2{grid-template-columns:1fr !important}}
   button[style]:hover{}
   .recharts-wrapper{font-family:var(--body)}
+  .sortbtn{border:1px solid var(--line);background:#fff;color:var(--muted);border-radius:6px;width:24px;height:22px;font-size:12px;cursor:pointer;padding:0;line-height:1}
+  .sortbtn:hover{border-color:var(--accent);color:var(--accent)}
+  .movebtn{border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:8px;line-height:1;padding:1px;opacity:.5}
+  .movebtn:hover{opacity:1;color:var(--accent)}
+  .movebtn:disabled{opacity:.15;cursor:default}
+  .amtoggle{border:1px solid var(--line);background:#fff;color:var(--muted);border-radius:5px;width:20px;height:20px;font-size:11px;font-weight:700;cursor:pointer;padding:0;font-family:var(--mono)}
+  .amtoggle:hover{border-color:var(--accent);color:var(--accent)}
+  .expitem{display:flex;flex-direction:column;align-items:flex-start;gap:1px;width:100%;text-align:left;border:none;background:transparent;padding:8px 10px;border-radius:8px;cursor:pointer;font:inherit;font-size:13px;color:var(--ink)}
+  .expitem:hover{background:var(--bg)}
+  @media print{
+    nav,.fabStack,.reminder,header .ghost,.expitem{display:none !important}
+    body{background:#fff}
+    .txCard,.bigCard,section{break-inside:avoid}
+  }
 </style>
 </head>
 <body>
@@ -72,6 +85,7 @@
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.7/Recharts.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
@@ -130,9 +144,27 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 const monthLabel = (k) => { const [y,m]=k.split("-").map(Number); return new Date(y,m-1,1).toLocaleString("en-US",{month:"long",year:"numeric"}); };
 const addMonths = (k,n) => { const [y,m]=k.split("-").map(Number); return monthKey(new Date(y,m-1+n,1)); };
-const blankRow = (desc="") => ({ id: uid(), desc, due:"", actual:0 });
-function freshMonth(){ const m={}; for(const c of COLS) m[c]=DEFAULTS[c].map(d=>blankRow(d)); return m; }
+const blankRow = (desc="") => ({ id: uid(), desc, actual:0, auto:true });
+function freshMonth(defaults){ const D=defaults||DEFAULTS; const m={txns:[]}; for(const c of COLS) m[c]=(D[c]||DEFAULTS[c]).map(d=>blankRow(d)); return m; }
 function calcEMI(p, rate, months){ if(months<=0) return 0; const r=rate/100/12; if(r===0) return p/months; return (p*r*Math.pow(1+r,months))/(Math.pow(1+r,months)-1); }
+// effective amount for a line: auto = sum of linked txns; manual = typed actual
+function lineAmount(row, txns){ if(row.auto){ return (txns||[]).filter(t=>t.lineId===row.id).reduce((a,t)=>a+(Number(t.amount)||0),0); } return Number(row.actual)||0; }
+
+// create a month and seed it with transactions from active recurring items (once, at creation)
+function seedMonth(monthK, recurring, defaults){
+  const m = freshMonth(defaults);
+  const [y,mo] = monthK.split("-").map(Number);
+  const daysIn = new Date(y, mo, 0).getDate();
+  for(const r of (recurring||[])){
+    if(!r.active) continue;
+    const col = r.col || "needs";
+    let line = m[col].find(l=>l.desc.toLowerCase()===(r.desc||"").toLowerCase());
+    if(!line){ line = blankRow(r.desc||"Recurring"); m[col].push(line); }
+    const day = String(Math.min(Math.max(Number(r.day)||1,1),daysIn)).padStart(2,"0");
+    m.txns.unshift({ id: uid(), date:`${monthK}-${day}`, time:"09:00", amount:Number(r.amount)||0, purpose:r.desc||"Recurring", lineId:line.id, remarks:"(recurring)", _recurId:r.id });
+  }
+  return m;
+}
 
 /* ───────── lock screen ───────── */
 function Lock({ mode, onUnlock, onCreate }) {
@@ -198,9 +230,16 @@ function App() {
   const [pass, setPass] = useState(null);
   const [months, setMonths] = useState({});
   const [assets, setAssets] = useState([]);
+  const [debts, setDebts] = useState([]);
+  const [recurring, setRecurring] = useState([]);
+  const [settings, setSettings] = useState({ defaults: DEFAULTS, lastExport: null });
   const [current, setCurrent] = useState(monthKey(new Date()));
   const [view, setView] = useState("dashboard");
   const [showBuy, setShowBuy] = useState(false);
+  const [showCalc, setShowCalc] = useState(false);
+  const [showQuick, setShowQuick] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [dismissReminder, setDismissReminder] = useState(false);
   const firstSave = useRef(true);
 
   useEffect(() => { setPhase(hasVault() ? "locked" : "create"); }, []);
@@ -208,12 +247,15 @@ function App() {
   const applyState = (s) => {
     setMonths(s.months || {});
     setAssets(s.assets || []);
+    setDebts(s.debts || []);
+    setRecurring(s.recurring || []);
+    setSettings({ defaults: (s.settings && s.settings.defaults) || DEFAULTS, lastExport: (s.settings && s.settings.lastExport) || null });
     setCurrent(s.current || monthKey(new Date()));
   };
 
   const onCreate = async (passcode) => {
     setPass(passcode);
-    const init = { months: { [monthKey(new Date())]: freshMonth() }, assets: [], current: monthKey(new Date()) };
+    const init = { months: { [monthKey(new Date())]: freshMonth() }, assets: [], debts: [], recurring: [], settings: { defaults: DEFAULTS, lastExport: null }, current: monthKey(new Date()) };
     applyState(init);
     writeBlob(await encryptJSON(init, passcode));
     setPhase("open");
@@ -228,22 +270,23 @@ function App() {
 
   useEffect(() => {
     if (phase !== "open") return;
-    setMonths((prev)=> prev[current] ? prev : { ...prev, [current]: freshMonth() });
+    setMonths((prev)=> prev[current] ? prev : { ...prev, [current]: seedMonth(current, recurring, settings.defaults) });
   }, [current, phase]);
 
   // persist (encrypted) on change
   useEffect(() => {
     if (phase !== "open" || !pass) return;
     if (firstSave.current) { firstSave.current = false; return; }
-    const t = setTimeout(async () => writeBlob(await encryptJSON({ months, assets, current }, pass)), 300);
+    const t = setTimeout(async () => writeBlob(await encryptJSON({ months, assets, debts, recurring, settings, current }, pass)), 300);
     return () => clearTimeout(t);
-  }, [months, assets, current, phase, pass]);
+  }, [months, assets, debts, recurring, settings, current, phase, pass]);
 
-  const month = months[current] || freshMonth();
+  const month = months[current] || freshMonth(settings.defaults);
 
   const totals = useMemo(() => {
-    const sum=(rows,k)=>rows.reduce((a,r)=>a+(Number(r[k])||0),0);
-    const t={}; for(const c of COLS) t[c]=sum(month[c]||[],"actual");
+    const txns=month.txns||[];
+    const sum=(rows)=>rows.reduce((a,r)=>a+lineAmount(r,txns),0);
+    const t={}; for(const c of COLS) t[c]=sum(month[c]||[]);
     return t;
   }, [month]);
 
@@ -254,14 +297,22 @@ function App() {
   const pct = (v) => (allocated > 0 ? (v/allocated)*100 : 0);
 
   const editRow = useCallback((col,id,field,value)=>{
-    setMonths(prev=>{const m={...prev[current]};m[col]=m[col].map(r=>r.id===id?{...r,[field]:(field==="desc"||field==="due")?value:Number(value)||0}:r);return{...prev,[current]:m};});
+    setMonths(prev=>{const m={...prev[current]};m[col]=m[col].map(r=>r.id===id?{...r,[field]:field==="desc"?value:Number(value)||0}:r);return{...prev,[current]:m};});
   },[current]);
   const addRow = useCallback((col)=>{ setMonths(prev=>{const m={...prev[current]};m[col]=[...m[col],blankRow("")];return{...prev,[current]:m};}); },[current]);
-  const delRow = useCallback((col,id)=>{ setMonths(prev=>{const m={...prev[current]};m[col]=m[col].filter(r=>r.id!==id);return{...prev,[current]:m};}); },[current]);
+  const delRow = useCallback((col,id)=>{ setMonths(prev=>{const m={...prev[current]};m[col]=m[col].filter(r=>r.id!==id);
+    m.txns=(m.txns||[]).map(t=>t.lineId===id?{...t,lineId:null}:t); return{...prev,[current]:m};}); },[current]);
+  const toggleAuto = useCallback((col,id)=>{ setMonths(prev=>{const m={...prev[current]};m[col]=m[col].map(r=>r.id===id?{...r,auto:!r.auto}:r);return{...prev,[current]:m};}); },[current]);
+  const moveRow = useCallback((col,id,dir)=>{ setMonths(prev=>{const m={...prev[current]};const arr=[...m[col]];const i=arr.findIndex(r=>r.id===id);const j=i+dir;if(i<0||j<0||j>=arr.length)return prev;[arr[i],arr[j]]=[arr[j],arr[i]];m[col]=arr;return{...prev,[current]:m};}); },[current]);
+  const sortCol = useCallback((col,dir)=>{ setMonths(prev=>{const m={...prev[current]};const txns=m.txns||[];m[col]=[...m[col]].sort((a,b)=>dir==="asc"?lineAmount(a,txns)-lineAmount(b,txns):lineAmount(b,txns)-lineAmount(a,txns));return{...prev,[current]:m};}); },[current]);
+
+  const addTxn = useCallback((txn)=>{ setMonths(prev=>{const m={...prev[current]};m.txns=[{id:uid(),...txn},...(m.txns||[])];return{...prev,[current]:m};}); },[current]);
+  const editTxn = useCallback((id,txn)=>{ setMonths(prev=>{const m={...prev[current]};m.txns=(m.txns||[]).map(t=>t.id===id?{...t,...txn}:t);return{...prev,[current]:m};}); },[current]);
+  const delTxn = useCallback((id)=>{ setMonths(prev=>{const m={...prev[current]};m.txns=(m.txns||[]).filter(t=>t.id!==id);return{...prev,[current]:m};}); },[current]);
 
   const copyPrev = useCallback(()=>{
     const pk=addMonths(current,-1);
-    setMonths(prev=>{ if(!prev[pk]) return prev; const src=prev[pk]; const m={}; for(const c of COLS) m[c]=src[c].map(r=>({...r,id:uid(),actual:0})); return {...prev,[current]:m}; });
+    setMonths(prev=>{ if(!prev[pk]) return prev; const src=prev[pk]; const m={txns:[]}; for(const c of COLS) m[c]=src[c].map(r=>({...r,id:uid(),actual:0})); return {...prev,[current]:m}; });
   },[current]);
 
   const buyAsset = useCallback((form)=>{
@@ -274,8 +325,8 @@ function App() {
     setMonths(prev=>{
       const next={...prev};
       const ensure=(k)=>{ if(!next[k]) next[k]=freshMonth(); else next[k]={...next[k],needs:[...next[k].needs]}; };
-      if(down>0){ ensure(startMonth); next[startMonth].needs.push({id:uid(),desc:`${asset.name} — Down payment`,due:asset.purchaseDate.slice(8,10),actual:down,_assetId:asset.id,_kind:"down"}); }
-      for(let i=0;i<tenure;i++){ const k=addMonths(startMonth,i); ensure(k); next[k].needs.push({id:uid(),desc:`${asset.name} EMI (${i+1}/${tenure})`,due:"",actual:emi,_assetId:asset.id,_kind:"emi"}); }
+      if(down>0){ ensure(startMonth); next[startMonth].needs.push({id:uid(),desc:`${asset.name} — Down payment`,actual:down,_assetId:asset.id,_kind:"down"}); }
+      for(let i=0;i<tenure;i++){ const k=addMonths(startMonth,i); ensure(k); next[k].needs.push({id:uid(),desc:`${asset.name} EMI (${i+1}/${tenure})`,actual:emi,_assetId:asset.id,_kind:"emi"}); }
       return next;
     });
     setShowBuy(false); setCurrent(startMonth); setView("budget");
@@ -298,8 +349,8 @@ function App() {
       const next={};
       for(const k of Object.keys(prev)){ const m={...prev[k]}; m.needs=m.needs.filter(r=>r._assetId!==assetId); next[k]=m; }
       const ensure=(k)=>{ if(!next[k]) next[k]=freshMonth(); else next[k]={...next[k],needs:[...next[k].needs]}; };
-      if(down>0){ ensure(startMonth); next[startMonth].needs.push({id:uid(),desc:`${updated.name} — Down payment`,due:updated.purchaseDate.slice(8,10),actual:down,_assetId:assetId,_kind:"down"}); }
-      for(let i=0;i<tenure;i++){ const k=addMonths(startMonth,i); ensure(k); next[k].needs.push({id:uid(),desc:`${updated.name} EMI (${i+1}/${tenure})`,due:"",actual:emi,_assetId:assetId,_kind:"emi"}); }
+      if(down>0){ ensure(startMonth); next[startMonth].needs.push({id:uid(),desc:`${updated.name} — Down payment`,actual:down,_assetId:assetId,_kind:"down"}); }
+      for(let i=0;i<tenure;i++){ const k=addMonths(startMonth,i); ensure(k); next[k].needs.push({id:uid(),desc:`${updated.name} EMI (${i+1}/${tenure})`,actual:emi,_assetId:assetId,_kind:"emi"}); }
       return next;
     });
   },[current]);
@@ -312,15 +363,71 @@ function App() {
 
   const monthList = useMemo(()=>{ const k=new Set(Object.keys(months)); k.add(current); return [...k].sort(); },[months,current]);
 
-  /* export / import (encrypted backup) */
+  /* debts (money owed / to receive) */
+  const addDebt = useCallback((d)=>{ setDebts(prev=>[{id:uid(),settled:false,createdAt:new Date().toISOString(),...d},...prev]); },[]);
+  const toggleDebt = useCallback((id)=>{ setDebts(prev=>prev.map(d=>d.id===id?{...d,settled:!d.settled,settledAt:!d.settled?new Date().toISOString():null}:d)); },[]);
+  const delDebt = useCallback((id)=>{ setDebts(prev=>prev.filter(d=>d.id!==id)); },[]);
+
+  /* recurring templates */
+  const addRecurring = useCallback((r)=>{ setRecurring(prev=>[...prev,{id:uid(),active:true,...r}]); },[]);
+  const editRecurring = useCallback((id,r)=>{ setRecurring(prev=>prev.map(x=>x.id===id?{...x,...r}:x)); },[]);
+  const delRecurring = useCallback((id)=>{ setRecurring(prev=>prev.filter(x=>x.id!==id)); },[]);
+  const toggleRecurring = useCallback((id)=>{ setRecurring(prev=>prev.map(x=>x.id===id?{...x,active:!x.active}:x)); },[]);
+
+  /* settings: editable default category lists */
+  const saveDefaults = useCallback((defaults)=>{ setSettings(s=>({...s,defaults})); },[]);
+
+  /* tabular export helper for line→column lookup */
+  const lineColMap = useMemo(()=>{ const map={}; for(const k of Object.keys(months)){ for(const c of COLS) for(const r of (months[k][c]||[])) map[r.id]=c; } return map; },[months]);
+  const allTxRows = useMemo(()=>{
+    const rows=[];
+    for(const k of Object.keys(months).sort()){
+      const m=months[k];
+      for(const x of (m.txns||[])){
+        const col=lineColMap[x.lineId]||"unlinked";
+        rows.push({Month:k,Date:x.date||"",Time:x.time||"",Type:col==="income"?"Income":"Expense",Category:col,Amount:Number(x.amount)||0,Purpose:x.purpose||"",Remarks:x.remarks||""});
+      }
+    }
+    return rows;
+  },[months,lineColMap]);
+  const yearRows = useMemo(()=>{
+    const rows=[];
+    for(const k of Object.keys(months).sort()){
+      const m=months[k]; const txns=m.txns||[]; const v={};
+      for(const c of COLS) v[c]=(m[c]||[]).reduce((a,r)=>a+lineAmount(r,txns),0);
+      rows.push({Month:k,Income:v.income,Needs:v.needs,Wants:v.wants,Savings:v.savings,Net:v.income-v.needs-v.wants-v.savings});
+    }
+    return rows;
+  },[months]);
+
+  const markExported = ()=> setSettings(s=>({...s,lastExport:new Date().toISOString()}));
+  const download = (content,filename,type)=>{ const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([content],{type})); a.download=filename; a.click(); };
+  const toCSV = (rows)=>{ if(!rows.length) return ""; const cols=Object.keys(rows[0]); const esc=(v)=>{ const s=String(v); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; }; return [cols.join(","),...rows.map(r=>cols.map(c=>esc(r[c])).join(","))].join("\n"); };
+
+  /* export / import (encrypted master backup) */
   const doExport = async () => {
-    const blob = await encryptJSON({ months, assets, current }, pass);
+    setDismissReminder(true); markExported();
+    const next={ months, assets, debts, recurring, settings:{...settings,lastExport:new Date().toISOString()}, current };
+    const blob = await encryptJSON(next, pass);
     const data = JSON.stringify({ ...blob, _app: "monthly-finances" }, null, 2);
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([data], { type: "application/json" }));
-    a.download = `finances-backup-${monthKey(new Date())}.json`;
-    a.click();
+    download(data,`finances-backup-${monthKey(new Date())}.json`,"application/json");
   };
+  const exportCSV = ()=>{ markExported(); setDismissReminder(true);
+    download(toCSV(allTxRows),`transactions-${monthKey(new Date())}.csv`,"text/csv"); };
+  const exportYearCSV = ()=>{ markExported(); setDismissReminder(true);
+    download(toCSV(yearRows),`monthly-summary-${monthKey(new Date())}.csv`,"text/csv"); };
+  const exportExcel = ()=>{
+    if(!window.XLSX){ alert("Excel library didn't load (offline?). Try CSV instead."); return; }
+    markExported(); setDismissReminder(true);
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(yearRows),"Monthly Summary");
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(allTxRows),"Transactions");
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(assets.map(a=>({Name:a.name,Category:a.category,Purchased:a.purchaseDate,Price:a.price,Down:a.down,EMI:a.emi,Tenure:a.tenure,Rate:a.rate}))),"Assets");
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(debts.map(d=>({Direction:d.dir==="owe"?"I owe":"Owed to me",Person:d.person,Amount:d.amount,Reason:d.reason,Settled:d.settled?"Yes":"No"}))),"Owe & Owed");
+    XLSX.writeFile(wb,`finances-${monthKey(new Date())}.xlsx`);
+  };
+  const exportPrint = ()=>{ markExported(); setDismissReminder(true); window.print(); };
+
   const doImport = (file) => {
     const r = new FileReader();
     r.onload = async () => {
@@ -330,13 +437,17 @@ function App() {
         if (pw == null) return;
         const s = await decryptJSON(blob, pw);
         applyState(s);
-        // re-encrypt under current passcode
-        writeBlob(await encryptJSON({ months: s.months, assets: s.assets, current: s.current }, pass));
+        writeBlob(await encryptJSON({ months: s.months, assets: s.assets, debts: s.debts||[], recurring: s.recurring||[], settings: s.settings||{defaults:DEFAULTS,lastExport:null}, current: s.current }, pass));
         alert("Backup imported.");
       } catch { alert("Couldn't read that backup — wrong file or passcode."); }
     };
     r.readAsText(file);
   };
+
+  // export reminder: >14 days or never (only if there's data worth losing)
+  const daysSinceExport = settings.lastExport ? Math.floor((Date.now()-new Date(settings.lastExport))/86400000) : 999;
+  const hasData = Object.keys(months).length>0 || assets.length>0;
+  const showReminder = !dismissReminder && hasData && daysSinceExport>=14;
 
   if (phase === "loading") return <div className="lockwrap"><div className="spin" /></div>;
   if (phase === "create") return <Lock mode="create" onCreate={onCreate} />;
@@ -364,19 +475,35 @@ function App() {
       <nav style={S.tabs}>
         <button className={view==="dashboard"?"tab on":"tab"} onClick={()=>setView("dashboard")}>Dashboard</button>
         <button className={view==="budget"?"tab on":"tab"} onClick={()=>setView("budget")}>Budget</button>
+        <button className={view==="year"?"tab on":"tab"} onClick={()=>setView("year")}>Year</button>
         <button className={view==="assets"?"tab on":"tab"} onClick={()=>setView("assets")}>Assets &amp; EMIs</button>
+        <button className={view==="recurring"?"tab on":"tab"} onClick={()=>setView("recurring")}>Recurring</button>
+        <button className={view==="debts"?"tab on":"tab"} onClick={()=>setView("debts")}>Owe &amp; Owed</button>
         <div style={{flex:1}} />
         {view==="budget" && <>
           <button className="ghost small" onClick={copyPrev} title="Copy last month's lines into this month">Copy last month</button>
         </>}
-        <button className="ghost small" onClick={doExport}>Export</button>
+        <ExportMenu onJSON={doExport} onCSV={exportCSV} onYearCSV={exportYearCSV} onExcel={exportExcel} onPrint={exportPrint} />
         <label className="ghost small" style={{cursor:"pointer"}}>Import
           <input type="file" accept="application/json" style={{display:"none"}} onChange={(e)=>e.target.files[0]&&doImport(e.target.files[0])} />
         </label>
+        <button className="ghost small" onClick={()=>setShowSettings(true)} title="Settings">⚙</button>
         <button className="primary" onClick={()=>setShowBuy(true)}>+ Buy asset</button>
       </nav>
 
+      {showReminder && (
+        <div style={S.reminder}>
+          <span>🛟 You {settings.lastExport?`last backed up ${daysSinceExport} days ago`:"haven't backed up yet"}. Your data lives only in this browser — export a copy to stay safe.</span>
+          <div style={{display:"flex",gap:8,flexShrink:0}}>
+            <button className="primary" style={{padding:"6px 12px"}} onClick={doExport}>Back up now</button>
+            <button className="ghost small" onClick={()=>setDismissReminder(true)}>Later</button>
+          </div>
+        </div>
+      )}
+
       {view==="dashboard" ? <Dashboard months={months} assets={assets} status={assetStatus} goto={(v,m)=>{ if(m) setCurrent(m); setView(v); }} />
+       : view==="year" ? <YearView months={months} goto={(m)=>{ setCurrent(m); setView("budget"); }} />
+       : view==="recurring" ? <RecurringView recurring={recurring} onAdd={addRecurring} onEdit={editRecurring} onDel={delRecurring} onToggle={toggleRecurring} />
        : view==="budget" ? <>
         <section style={S.summary}>
           <Stat label="Income" value={incomeTotal} tint="var(--income)" />
@@ -387,9 +514,19 @@ function App() {
         </section>
         <Bar needs={spend.needs} wants={spend.wants} savings={spend.savings} total={allocated} />
         <section style={S.grid}>
-          {COLS.map(c=><BudgetColumn key={c} col={c} rows={month[c]||[]} total={totals[c]} onEdit={editRow} onAdd={addRow} onDel={delRow} />)}
+          {COLS.map(c=><BudgetColumn key={c} col={c} rows={month[c]||[]} txns={month.txns||[]} total={totals[c]} onEdit={editRow} onAdd={addRow} onDel={delRow} onToggleAuto={toggleAuto} onMove={moveRow} onSort={sortCol} />)}
         </section>
-      </> : <AssetsView assets={assets} status={assetStatus} onDelete={deleteAsset} onEdit={(a)=>setShowBuy(a)} onBuy={()=>setShowBuy(true)} />}
+        <TransactionLog month={month} onAdd={addTxn} onEdit={editTxn} onDel={delTxn} />
+      </> : view==="assets" ? <AssetsView assets={assets} status={assetStatus} onDelete={deleteAsset} onEdit={(a)=>setShowBuy(a)} onBuy={()=>setShowBuy(true)} />
+       : <DebtsView debts={debts} onAdd={addDebt} onToggle={toggleDebt} onDelete={delDebt} />}
+
+      <div style={S.fabStack}>
+        <button style={{...S.fabBtn,background:"var(--income)"}} onClick={()=>setShowQuick(true)} title="Quick-add transaction">＋</button>
+        <button style={S.fabBtn} onClick={()=>setShowCalc(s=>!s)} title="Calculator">🧮</button>
+      </div>
+      {showCalc && <Calculator onClose={()=>setShowCalc(false)} />}
+      {showQuick && <QuickAdd month={month} monthKey={current} onAdd={addTxn} onClose={()=>setShowQuick(false)} />}
+      {showSettings && <SettingsModal defaults={settings.defaults} onSave={(d)=>{ saveDefaults(d); setShowSettings(false); }} onClose={()=>setShowSettings(false)} />}
 
       {showBuy && <BuyModal
         onClose={()=>setShowBuy(false)}
@@ -403,7 +540,7 @@ function App() {
 const RC = window.Recharts || {};
 const CHART_COLORS = { income:"#2f9e6f", needs:"#d9762b", wants:"#c2477e", savings:"#3a6ea5", accent:"#6d5bd0" };
 
-function sumCol(monthObj, col){ return (monthObj?.[col]||[]).reduce((a,r)=>a+(Number(r.actual)||0),0); }
+function sumCol(monthObj, col){ const txns=monthObj?.txns||[]; return (monthObj?.[col]||[]).reduce((a,r)=>a+lineAmount(r,txns),0); }
 
 function Dashboard({ months, assets, status, goto }){
   const todayKey = monthKey(new Date());
@@ -430,6 +567,9 @@ function Dashboard({ months, assets, status, goto }){
   const netPosition = agg.savings + assetValue - outstanding;
   const savingsRate = agg.income>0 ? (agg.savings/agg.income)*100 : 0;
   const moneyLeft = agg.income - agg.outflow;
+  const avgSpend = elapsedKeys.length ? agg.spent/elapsedKeys.length : 0;
+  // runway: how many months your accumulated savings would cover average spending
+  const runway = avgSpend>0 ? agg.savings/avgSpend : 0;
 
   // monthly trend series (all months, future included so you can see scheduled EMIs)
   const trend = keys.map(k=>({
@@ -439,12 +579,38 @@ function Dashboard({ months, assets, status, goto }){
     Savings: sumCol(months[k],"savings"),
   }));
 
+  // net-worth over time: cumulative savings + assets owned by then − EMI still outstanding at that month
+  const netWorthSeries = useMemo(()=>{
+    let cumSavings=0; const out=[];
+    for(const k of elapsedKeys){
+      cumSavings += sumCol(months[k],"savings");
+      // assets purchased on/before this month, value counted; outstanding EMI as of this month
+      let aVal=0, owed=0;
+      for(const a of assets){
+        if(a.startMonth<=k){
+          aVal += Number(a.price)||0;
+          let paid=0; for(let i=0;i<a.tenure;i++){ if(addMonths(a.startMonth,i)<=k) paid++; }
+          owed += Math.max(a.emi*a.tenure - a.emi*paid, 0);
+        }
+      }
+      out.push({ name: monthLabel(k).replace(/ \d+$/, m=>"'"+m.trim().slice(2)), NetWorth: Math.round(cumSavings+aVal-owed) });
+    }
+    return out;
+  },[months,assets,elapsedKeys.join(",")]);
+
+  // savings-rate trend per month
+  const rateSeries = keys.filter(k=>k<=todayKey).map(k=>{
+    const inc=sumCol(months[k],"income"); const sav=sumCol(months[k],"savings");
+    return { name: monthLabel(k).replace(/ \d+$/, m=>"'"+m.trim().slice(2)), Rate: inc>0?Math.round(sav/inc*100):0 };
+  });
+
   // category breakdown across elapsed months (top needs+wants line items)
   const catMap = {};
   for(const k of elapsedKeys){
+    const txns=months[k]?.txns||[];
     for(const col of ["needs","wants"]){
       for(const r of (months[k]?.[col]||[])){
-        const amt=Number(r.actual)||0; if(amt<=0) continue;
+        const amt=lineAmount(r,txns); if(amt<=0) continue;
         const label=(r.desc||"Other").replace(/ EMI \(\d+\/\d+\)$/,"").replace(/ — Down payment$/,"");
         catMap[label]=(catMap[label]||0)+amt;
       }
@@ -500,8 +666,8 @@ function Dashboard({ months, assets, status, goto }){
         <MiniStat label="Asset value" value={assetValue} tint="var(--savings)" />
         <MiniStat label="Outstanding EMI" value={outstanding} tint="var(--danger)" />
         <MiniStat label="EMIs / month" value={monthlyEmi} tint="var(--needs)" />
+        <MiniStat label="Savings runway" value={`${runway.toFixed(1)} mo`} tint="var(--accent)" raw />
         <MiniStat label="Assets owned" value={assets.length} tint="var(--ink)" raw />
-        <MiniStat label="Months tracked" value={elapsedKeys.length} tint="var(--ink)" raw />
       </section>
 
       {!hasData ? (
@@ -553,6 +719,24 @@ function Dashboard({ months, assets, status, goto }){
             </Chart>}
           </Card>
 
+          {/* net worth over time */}
+          <Card title="Net worth over time">
+            {!Chart && <NoChart/>}
+            {Chart && netWorthSeries.length>0 && <Chart width="100%" height={240}>
+              <RC.AreaChart data={netWorthSeries} margin={{top:10,right:10,left:0,bottom:0}}>
+                <defs>
+                  <linearGradient id="gNW" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={CHART_COLORS.accent} stopOpacity={0.4}/><stop offset="100%" stopColor={CHART_COLORS.accent} stopOpacity={0}/></linearGradient>
+                </defs>
+                <RC.CartesianGrid strokeDasharray="3 3" stroke="var(--line)" vertical={false}/>
+                <RC.XAxis dataKey="name" tick={{fontSize:11,fill:"var(--muted)"}} axisLine={false} tickLine={false}/>
+                <RC.YAxis tick={{fontSize:11,fill:"var(--muted)"}} axisLine={false} tickLine={false} tickFormatter={(v)=>Math.abs(v)>=1000?(v/1000)+"k":v}/>
+                <RC.Tooltip formatter={(v)=>INR(v)} contentStyle={{borderRadius:10,border:"1px solid var(--line)",fontSize:13}}/>
+                <RC.Area type="monotone" dataKey="NetWorth" stroke={CHART_COLORS.accent} fill="url(#gNW)" strokeWidth={2.5}/>
+              </RC.AreaChart>
+            </Chart>}
+            <p style={{fontSize:12,color:"var(--muted)",marginTop:8}}>Cumulative savings + asset value − outstanding EMI debt, month by month.</p>
+          </Card>
+
           <div style={S.chartGrid}>
             <Card title="Where your money goes">
               {Chart && allocPie.length>0 && <Chart width="100%" height={240}>
@@ -573,6 +757,18 @@ function Dashboard({ months, assets, status, goto }){
                   <RC.Tooltip formatter={(v)=>INR(v)} contentStyle={{borderRadius:10,border:"1px solid var(--line)",fontSize:13}}/>
                   <RC.Bar dataKey="value" radius={[0,6,6,0]} fill={CHART_COLORS.accent}/>
                 </RC.BarChart>
+              </Chart>}
+            </Card>
+            <Card title="Savings rate trend">
+              {Chart && rateSeries.length>0 && <Chart width="100%" height={240}>
+                <RC.LineChart data={rateSeries} margin={{top:10,right:12,left:0,bottom:0}}>
+                  <RC.CartesianGrid strokeDasharray="3 3" stroke="var(--line)" vertical={false}/>
+                  <RC.XAxis dataKey="name" tick={{fontSize:11,fill:"var(--muted)"}} axisLine={false} tickLine={false}/>
+                  <RC.YAxis tick={{fontSize:11,fill:"var(--muted)"}} axisLine={false} tickLine={false} tickFormatter={(v)=>v+"%"} domain={[0,'auto']}/>
+                  <RC.Tooltip formatter={(v)=>v+"%"} contentStyle={{borderRadius:10,border:"1px solid var(--line)",fontSize:13}}/>
+                  <RC.ReferenceLine y={20} stroke={CHART_COLORS.savings} strokeDasharray="4 4" label={{value:"20% target",fontSize:10,fill:"var(--muted)",position:"insideTopRight"}}/>
+                  <RC.Line type="monotone" dataKey="Rate" stroke={CHART_COLORS.savings} strokeWidth={2.5} dot={{r:3}}/>
+                </RC.LineChart>
               </Chart>}
             </Card>
           </div>
@@ -690,7 +886,7 @@ function Bar({needs,wants,savings,total}){
     </div>
   </div>;
 }
-function BudgetColumn({col,rows,total,onEdit,onAdd,onDel}){
+function BudgetColumn({col,rows,txns,total,onEdit,onAdd,onDel,onToggleAuto,onMove,onSort}){
   const meta=COL_META[col];
   return <div style={S.column}>
     <div style={{...S.colHead,borderColor:meta.tint}}>
@@ -698,20 +894,442 @@ function BudgetColumn({col,rows,total,onEdit,onAdd,onDel}){
       <h3 style={S.colTitle}>{meta.label}</h3>
       <span style={S.colTotal}>{INR(total)}</span>
     </div>
-    <div style={S.rowHead}><span>Description</span><span style={{textAlign:"center"}}>Due</span><span style={{textAlign:"right"}}>Amount</span><span /></div>
+    <div style={S.sortBar}>
+      <span style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--mono)"}}>sort</span>
+      <button className="sortbtn" onClick={()=>onSort(col,"asc")} title="Ascending by amount">↑</button>
+      <button className="sortbtn" onClick={()=>onSort(col,"desc")} title="Descending by amount">↓</button>
+    </div>
+    <div style={S.rowHeadB}><span /><span>Description</span><span style={{textAlign:"right"}}>Amount</span><span /></div>
     <div>
-      {rows.map(r=>(
-        <div key={r.id} style={S.row} className={r._assetId?"row linked":"row"}>
-          <input className="cell desc" value={r.desc} placeholder="—" onChange={(e)=>onEdit(col,r.id,"desc",e.target.value)} title={r.desc || (r._assetId?"Linked to an asset":"")} />
-          <input className="cell due" value={r.due} placeholder="–" onChange={(e)=>onEdit(col,r.id,"due",e.target.value)} />
-          <input className="cell num" type="number" value={r.actual||""} placeholder="0" onChange={(e)=>onEdit(col,r.id,"actual",e.target.value)} />
-          <button className="rowdel" onClick={()=>onDel(col,r.id)} aria-label="Delete line">×</button>
-        </div>
-      ))}
+      {rows.map((r,idx)=>{
+        const linkedCount=(txns||[]).filter(t=>t.lineId===r.id).length;
+        const amt=lineAmount(r,txns);
+        return (
+        <div key={r.id} style={S.rowB} className={r._assetId?"row linked":"row"}>
+          <div style={S.moveCol}>
+            <button className="movebtn" disabled={idx===0} onClick={()=>onMove(col,r.id,-1)} title="Move up">▲</button>
+            <button className="movebtn" disabled={idx===rows.length-1} onClick={()=>onMove(col,r.id,1)} title="Move down">▼</button>
+          </div>
+          <input className="cell desc" value={r.desc} placeholder="—" onChange={(e)=>onEdit(col,r.id,"desc",e.target.value)} title={r.desc} />
+          {r.auto
+            ? <div style={S.autoAmt} title={`Auto-summed from ${linkedCount} transaction(s). Click the A/M toggle to type manually.`}>{INR(amt)}<span style={S.autoTag}>{linkedCount}</span></div>
+            : <input className="cell num" type="number" value={r.actual||""} placeholder="0" onChange={(e)=>onEdit(col,r.id,"actual",e.target.value)} />}
+          <div style={S.rowTools}>
+            <button className="amtoggle" onClick={()=>onToggleAuto(col,r.id)} title={r.auto?"Auto (sums linked transactions). Click for manual entry.":"Manual entry. Click for auto-sum."}>{r.auto?"A":"M"}</button>
+            <button className="rowdel" onClick={()=>onDel(col,r.id)} aria-label="Delete line">×</button>
+          </div>
+        </div>);
+      })}
     </div>
     <button className="addrow" onClick={()=>onAdd(col)}>+ Add line</button>
   </div>;
 }
+
+function TransactionLog({month,onAdd,onEdit,onDel}){
+  const today=new Date();
+  const blank={date:today.toISOString().slice(0,10),time:today.toTimeString().slice(0,5),amount:"",purpose:"",lineId:"",remarks:""};
+  const [f,setF]=useState(blank);
+  const [editId,setEditId]=useState(null);
+  const [q,setQ]=useState("");
+  const [filterCol,setFilterCol]=useState("all");
+  const set=(k)=>(e)=>setF({...f,[k]:e.target.value});
+
+  const opts=[];
+  for(const c of COLS) for(const r of (month[c]||[])) opts.push({col:c,id:r.id,label:`${COL_META[c].label} › ${r.desc||"(unnamed)"}`});
+  const lineLabel=(id)=>{ const o=opts.find(x=>x.id===id); return o?o.label:"Unlinked"; };
+  const lineCol=(id)=>{ const o=opts.find(x=>x.id===id); return o?o.col:null; };
+  const isIncome=(x)=> lineCol(x.lineId)==="income";
+
+  const txns=month.txns||[];
+  const submit=()=>{
+    if(!f.amount) return;
+    const payload={date:f.date,time:f.time,amount:Number(f.amount)||0,purpose:f.purpose,lineId:f.lineId||null,remarks:f.remarks};
+    if(editId){ onEdit(editId,payload); setEditId(null); } else { onAdd(payload); }
+    setF({...blank,time:new Date().toTimeString().slice(0,5)});
+  };
+  const startEdit=(x)=>{ setEditId(x.id); setF({date:x.date,time:x.time,amount:String(x.amount),purpose:x.purpose||"",lineId:x.lineId||"",remarks:x.remarks||""}); window.scrollTo({top:document.body.scrollHeight,behavior:"smooth"}); };
+  const cancelEdit=()=>{ setEditId(null); setF({...blank,time:new Date().toTimeString().slice(0,5)}); };
+
+  // search + filter
+  const filtered=txns.filter(x=>{
+    if(filterCol!=="all" && lineCol(x.lineId)!==filterCol) return false;
+    if(!q.trim()) return true;
+    const hay=`${x.purpose} ${x.remarks} ${x.amount} ${lineLabel(x.lineId)}`.toLowerCase();
+    return hay.includes(q.trim().toLowerCase());
+  }).sort((a,b)=>{
+    const ka=`${a.date||""} ${a.time||"00:00"}`, kb=`${b.date||""} ${b.time||"00:00"}`;
+    return kb.localeCompare(ka); // most recent date+time on top
+  });
+  const incomeSum=filtered.filter(x=>isIncome(x)).reduce((a,x)=>a+(Number(x.amount)||0),0);
+  const expenseSum=filtered.filter(x=>!isIncome(x)).reduce((a,x)=>a+(Number(x.amount)||0),0);
+
+  return <div style={S.txCard}>
+    <div style={{display:"flex",alignItems:"baseline",gap:10,marginBottom:12,flexWrap:"wrap"}}>
+      <h3 style={{...S.cardTitle,margin:0}}>Transaction log</h3>
+      <span style={{fontSize:12,color:"var(--muted)"}}>{filtered.length} shown{filtered.length!==txns.length?` of ${txns.length}`:""}</span>
+      <span style={{fontSize:13,fontWeight:700,color:"var(--income)",fontFamily:"var(--mono)"}}>+{INR(incomeSum)} in</span>
+      <span style={{fontSize:13,fontWeight:700,color:"var(--danger)",fontFamily:"var(--mono)"}}>−{INR(expenseSum)} out</span>
+      <span style={{fontSize:12,color:"var(--muted)",fontFamily:"var(--mono)"}}>net {INR(incomeSum-expenseSum)}</span>
+    </div>
+    <p style={{fontSize:12,color:"var(--muted)",margin:"0 0 12px"}}>Log each payment and link it to a budget line — lines set to "A" auto-sum their transactions. Click a row to edit it. Newest on top.</p>
+
+    <div style={S.txForm}>
+      <input className="cell field" type="date" value={f.date} onChange={set("date")} title="Date" />
+      <input className="cell field" type="time" value={f.time} onChange={set("time")} title="Time" />
+      <input className="cell field" type="number" value={f.amount} placeholder="Amount ₹" onChange={set("amount")} />
+      <input className="cell field" value={f.purpose} placeholder="Occasion / purpose" onChange={set("purpose")} />
+      <select className="select field" value={f.lineId} onChange={set("lineId")} title="Category (budget line)">
+        <option value="">— No category —</option>
+        {opts.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}
+      </select>
+      <input className="cell field" value={f.remarks} placeholder="Remarks" onChange={set("remarks")} onKeyDown={(e)=>e.key==="Enter"&&submit()} />
+      <div style={{gridColumn:"1 / -1",display:"flex",gap:8}}>
+        <button className="primary" style={{flex:1}} onClick={submit} disabled={!f.amount}>{editId?"Save changes":"+ Add transaction"}</button>
+        {editId && <button className="ghost" onClick={cancelEdit}>Cancel</button>}
+      </div>
+    </div>
+
+    {txns.length>0 && <div style={S.txFilter}>
+      <input className="cell field" style={{flex:1,minWidth:140}} value={q} placeholder="Search purpose, remarks, amount…" onChange={(e)=>setQ(e.target.value)} />
+      <select className="select field" value={filterCol} onChange={(e)=>setFilterCol(e.target.value)}>
+        <option value="all">All categories</option>
+        {COLS.map(c=><option key={c} value={c}>{COL_META[c].label}</option>)}
+        <option value="null">Unlinked</option>
+      </select>
+      {(q||filterCol!=="all") && <button className="ghost small" onClick={()=>{setQ("");setFilterCol("all");}}>Clear</button>}
+    </div>}
+
+    {filtered.length>0 ? <div style={S.txTableWrap}>
+      <table style={S.txTable}>
+        <thead><tr>
+          <th style={S.th}>Date</th><th style={S.th}>Time</th><th style={{...S.th,textAlign:"right"}}>Amount</th>
+          <th style={S.th}>Purpose</th><th style={S.th}>Category</th><th style={S.th}>Remarks</th><th style={S.th}></th>
+        </tr></thead>
+        <tbody>
+          {filtered.map(x=>(
+            <tr key={x.id} style={{...S.tr, ...(editId===x.id?{background:"var(--bg)"}:{})}} className="txrow">
+              <td style={{...S.td,cursor:"pointer"}} onClick={()=>startEdit(x)}>{x.date}</td>
+              <td style={{...S.td,cursor:"pointer"}} onClick={()=>startEdit(x)}>{x.time}</td>
+              <td style={{...S.td,textAlign:"right",fontFamily:"var(--mono)",fontWeight:700,color:isIncome(x)?"var(--income)":"var(--danger)",cursor:"pointer"}} onClick={()=>startEdit(x)}>{isIncome(x)?"+":"−"}{INR(x.amount)}</td>
+              <td style={{...S.td,cursor:"pointer"}} onClick={()=>startEdit(x)}>{x.purpose||"—"}</td>
+              <td style={{...S.td,color:x.lineId?"var(--accent)":"var(--muted)",fontSize:12,cursor:"pointer"}} onClick={()=>startEdit(x)}>{lineLabel(x.lineId)}</td>
+              <td style={{...S.td,color:"var(--muted)",cursor:"pointer"}} onClick={()=>startEdit(x)}>{x.remarks||"—"}</td>
+              <td style={S.td}><button className="rowdel" style={{opacity:.7}} onClick={()=>onDel(x.id)} title="Delete transaction">×</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div> : txns.length>0 ? <div style={{padding:"20px 0",textAlign:"center",color:"var(--muted)",fontSize:13}}>No transactions match your search.</div> : null}
+  </div>;
+}
+
+function DebtsView({debts,onAdd,onToggle,onDelete}){
+  const [dir,setDir]=useState("owe"); // owe = I owe them; owed = they owe me
+  const [person,setPerson]=useState("");
+  const [amount,setAmount]=useState("");
+  const [reason,setReason]=useState("");
+
+  const submit=()=>{ if(!person||!amount) return; onAdd({dir,person,amount:Number(amount)||0,reason}); setPerson("");setAmount("");setReason(""); };
+
+  const active=debts.filter(d=>!d.settled);
+  const iOwe=active.filter(d=>d.dir==="owe").reduce((a,x)=>a+x.amount,0);
+  const owedToMe=active.filter(d=>d.dir==="owed").reduce((a,x)=>a+x.amount,0);
+
+  return <div>
+    <section style={S.summary}>
+      <Stat label="I owe (open)" value={iOwe} tint="var(--danger)" />
+      <Stat label="Owed to me (open)" value={owedToMe} tint="var(--income)" />
+      <Stat label="Net position" value={owedToMe-iOwe} tint={owedToMe-iOwe>=0?"var(--income)":"var(--danger)"} />
+    </section>
+
+    <div style={S.txCard}>
+      <h3 style={S.cardTitle}>Add a record</h3>
+      <div style={S.debtForm}>
+        <div className="seg" style={{gridColumn:"1 / -1",width:"fit-content"}}>
+          <button className={dir==="owe"?"on":""} onClick={()=>setDir("owe")}>I owe someone</button>
+          <button className={dir==="owed"?"on":""} onClick={()=>setDir("owed")}>Someone owes me</button>
+        </div>
+        <input className="cell field" value={person} placeholder="Person / party" onChange={(e)=>setPerson(e.target.value)} />
+        <input className="cell field" type="number" value={amount} placeholder="Amount ₹" onChange={(e)=>setAmount(e.target.value)} />
+        <input className="cell field" value={reason} placeholder="Reason / note" onChange={(e)=>setReason(e.target.value)} onKeyDown={(e)=>e.key==="Enter"&&submit()} />
+        <button className="primary" onClick={submit} disabled={!person||!amount}>+ Add</button>
+      </div>
+    </div>
+
+    {debts.length===0 ? (
+      <div style={S.empty}><p style={{margin:0,color:"var(--muted)"}}>No records yet. Add money you owe or that's owed to you above.</p></div>
+    ) : (
+      <div style={S.debtList}>
+        {debts.map(x=>(
+          <div key={x.id} style={{...S.debtRow, opacity:x.settled?0.55:1}}>
+            <input type="checkbox" checked={x.settled} onChange={()=>onToggle(x.id)} title="Mark settled / reopen" style={{width:18,height:18,cursor:"pointer",flexShrink:0}} />
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:600,textDecoration:x.settled?"line-through":"none"}}>
+                <span style={{color:x.dir==="owe"?"var(--danger)":"var(--income)"}}>{x.dir==="owe"?"You owe":"Owes you"}</span> {x.person} · {INR(x.amount)}
+              </div>
+              <div style={{fontSize:12,color:"var(--muted)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{x.reason||"—"}{x.settled && x.settledAt?` · settled ${x.settledAt.slice(0,10)}`:""}</div>
+            </div>
+            <button className="ghost small" style={{color:"var(--danger)",flexShrink:0}} onClick={()=>onDelete(x.id)}>Delete</button>
+          </div>
+        ))}
+      </div>
+    )}
+  </div>;
+}
+
+function ExportMenu({onJSON,onCSV,onYearCSV,onExcel,onPrint}){
+  const [open,setOpen]=useState(false);
+  useEffect(()=>{ if(!open) return; const h=()=>setOpen(false); window.addEventListener("click",h); return ()=>window.removeEventListener("click",h); },[open]);
+  const item=(label,fn,note)=> <button className="expitem" onClick={()=>{ setOpen(false); fn(); }}><span>{label}</span>{note?<span style={{fontSize:11,color:"var(--muted)"}}>{note}</span>:null}</button>;
+  return <div style={{position:"relative"}} onClick={(e)=>e.stopPropagation()}>
+    <button className="ghost small" onClick={()=>setOpen(o=>!o)}>Export ▾</button>
+    {open && <div style={S.expMenu}>
+      {item("Full backup (JSON)",onJSON,"encrypted · re-importable")}
+      {item("Transactions (CSV)",onCSV,"plaintext")}
+      {item("Monthly summary (CSV)",onYearCSV,"plaintext")}
+      {item("Excel workbook (.xlsx)",onExcel,"all sheets")}
+      {item("Print / Save as PDF",onPrint,"browser dialog")}
+      <div style={{fontSize:10,color:"var(--muted)",padding:"6px 10px 2px",borderTop:"1px solid var(--line)",marginTop:4}}>CSV/Excel/PDF are unencrypted. Keep them safe.</div>
+    </div>}
+  </div>;
+}
+
+function QuickAdd({month,monthKey,onAdd,onClose}){
+  const now=new Date();
+  const [amount,setAmount]=useState("");
+  const [purpose,setPurpose]=useState("");
+  const [lineId,setLineId]=useState("");
+  const [remarks,setRemarks]=useState("");
+  const opts=[];
+  for(const c of COLS) for(const r of (month[c]||[])) opts.push({id:r.id,label:`${COL_META[c].label} › ${r.desc||"(unnamed)"}`});
+  const submit=()=>{ if(!amount) return; onAdd({date:now.toISOString().slice(0,10),time:now.toTimeString().slice(0,5),amount:Number(amount)||0,purpose,lineId:lineId||null,remarks}); onClose(); };
+  return <div style={S.modalWrap} onClick={onClose}>
+    <div style={{...S.modal,maxWidth:440}} onClick={(e)=>e.stopPropagation()}>
+      <div style={S.modalHead}><h3 style={{margin:0}}>Quick add</h3><button className="rowdel" style={{opacity:1}} onClick={onClose}>×</button></div>
+      <p style={S.modalNote}>Logs to <b>{monthLabel(monthKey)}</b> with today's date &amp; time.</p>
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        <input className="cell field" type="number" autoFocus value={amount} placeholder="Amount ₹" onChange={(e)=>setAmount(e.target.value)} onKeyDown={(e)=>e.key==="Enter"&&submit()} />
+        <input className="cell field" value={purpose} placeholder="Occasion / purpose" onChange={(e)=>setPurpose(e.target.value)} onKeyDown={(e)=>e.key==="Enter"&&submit()} />
+        <select className="select field" value={lineId} onChange={(e)=>setLineId(e.target.value)}>
+          <option value="">— No category —</option>
+          {opts.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}
+        </select>
+        <input className="cell field" value={remarks} placeholder="Remarks" onChange={(e)=>setRemarks(e.target.value)} onKeyDown={(e)=>e.key==="Enter"&&submit()} />
+      </div>
+      <div style={S.modalActions}>
+        <button className="ghost" onClick={onClose}>Cancel</button>
+        <button className="primary" onClick={submit} disabled={!amount}>Add transaction</button>
+      </div>
+    </div>
+  </div>;
+}
+
+function SettingsModal({defaults,onSave,onClose}){
+  const [d,setD]=useState(()=>({income:[...(defaults.income||[])],needs:[...(defaults.needs||[])],wants:[...(defaults.wants||[])],savings:[...(defaults.savings||[])]}));
+  const setList=(col,text)=> setD({...d,[col]:text.split("\n").map(s=>s.trim()).filter(Boolean)});
+  return <div style={S.modalWrap} onClick={onClose}>
+    <div style={{...S.modal,maxWidth:640}} onClick={(e)=>e.stopPropagation()}>
+      <div style={S.modalHead}><h3 style={{margin:0}}>Default categories</h3><button className="rowdel" style={{opacity:1}} onClick={onClose}>×</button></div>
+      <p style={S.modalNote}>These are the lines each <b>new</b> month starts with — one per line. Editing here does <b>not</b> change months you've already created.</p>
+      <div style={S.setGrid}>
+        {COLS.map(c=>(
+          <div key={c}>
+            <div style={{fontSize:12,fontWeight:700,color:COL_META[c].tint,marginBottom:4}}>{COL_META[c].label}</div>
+            <textarea className="cell field" style={{width:"100%",minHeight:160,resize:"vertical",fontFamily:"var(--body)",lineHeight:1.6}} value={d[c].join("\n")} onChange={(e)=>setList(c,e.target.value)} />
+          </div>
+        ))}
+      </div>
+      <div style={S.modalActions}>
+        <button className="ghost" onClick={()=>setD({income:[...DEFAULTS.income],needs:[...DEFAULTS.needs],wants:[...DEFAULTS.wants],savings:[...DEFAULTS.savings]})}>Reset to original</button>
+        <button className="primary" onClick={()=>onSave(d)}>Save defaults</button>
+      </div>
+    </div>
+  </div>;
+}
+
+function Calculator({onClose}){
+  const [expr,setExpr]=useState("");
+  const [out,setOut]=useState("");
+  const press=useCallback((k)=>{
+    if(k==="C"){ setExpr("");setOut(""); return; }
+    if(k==="="){ setExpr(cur=>{ try{ const safe=cur.replace(/[^0-9+\-*/.() %]/g,""); const v=Function('"use strict";return ('+safe.replace(/%/g,"/100")+')')(); setOut(String(Number.isFinite(v)?Math.round(v*100)/100:"")); }catch{ setOut("error"); } return cur; }); return; }
+    if(k==="⌫"){ setExpr(e=>e.slice(0,-1)); return; }
+    setExpr(e=>e+k);
+  },[]);
+
+  // keyboard support
+  useEffect(()=>{
+    const onKey=(e)=>{
+      const k=e.key;
+      if(k==="Escape"){ e.preventDefault(); onClose(); return; }
+      if(k==="Enter" || k==="="){ e.preventDefault(); press("="); return; }
+      if(k==="Backspace"){ e.preventDefault(); press("⌫"); return; }
+      if(k==="Delete" || k==="c" || k==="C"){ e.preventDefault(); press("C"); return; }
+      if(/^[0-9]$/.test(k)){ e.preventDefault(); press(k); return; }
+      if(["+","-","*","/",".","%","(",")"].includes(k)){ e.preventDefault(); press(k); return; }
+      if(k==="x" || k==="X"){ e.preventDefault(); press("*"); return; }
+    };
+    window.addEventListener("keydown",onKey);
+    return ()=>window.removeEventListener("keydown",onKey);
+  },[press,onClose]);
+
+  const keys=["C","⌫","%","/","7","8","9","*","4","5","6","-","1","2","3","+","0",".","="];
+  return <div style={S.calcPanel}>
+    <div style={S.calcHead}><span style={{fontWeight:700,fontFamily:"var(--display)"}}>Calculator</span><button className="rowdel" style={{opacity:1}} onClick={onClose}>×</button></div>
+    <div style={S.calcDisplay}>
+      <div style={S.calcExpr}>{expr||"0"}</div>
+      <div style={S.calcOut}>{out!==""?"= "+out:""}</div>
+    </div>
+    <div style={S.calcKeys}>
+      {keys.map(k=>(
+        <button key={k} onClick={()=>press(k)}
+          style={{...S.calcKey, ...(k==="="?S.calcEq:{}), ...(["/","*","-","+","%"].includes(k)?S.calcOp:{}), ...(k==="C"||k==="⌫"?S.calcFn:{}), ...(k==="0"?{gridColumn:"span 1"}:{})}}>
+          {k}
+        </button>
+      ))}
+    </div>
+    <div style={S.calcHint}>Tip: type with your keyboard · Enter = · Esc closes · x for ×</div>
+  </div>;
+}
+
+function RecurringView({recurring,onAdd,onEdit,onDel,onToggle}){
+  const blank={desc:"",amount:"",col:"needs",day:"1"};
+  const [f,setF]=useState(blank);
+  const [editId,setEditId]=useState(null);
+  const set=(k)=>(e)=>setF({...f,[k]:e.target.value});
+  const submit=()=>{
+    if(!f.desc||!f.amount) return;
+    const payload={desc:f.desc,amount:Number(f.amount)||0,col:f.col,day:Number(f.day)||1};
+    if(editId){ onEdit(editId,payload); setEditId(null); } else { onAdd(payload); }
+    setF(blank);
+  };
+  const startEdit=(r)=>{ setEditId(r.id); setF({desc:r.desc,amount:String(r.amount),col:r.col,day:String(r.day)}); };
+  const cancel=()=>{ setEditId(null); setF(blank); };
+
+  const monthlyByCol={income:0,needs:0,wants:0,savings:0};
+  for(const r of recurring) if(r.active) monthlyByCol[r.col]+=Number(r.amount)||0;
+
+  return <div>
+    <section style={S.summary}>
+      <Stat label="Recurring income" value={monthlyByCol.income} tint="var(--income)" />
+      <Stat label="Recurring needs" value={monthlyByCol.needs} tint="var(--needs)" />
+      <Stat label="Recurring wants" value={monthlyByCol.wants} tint="var(--wants)" />
+      <Stat label="Recurring savings" value={monthlyByCol.savings} tint="var(--savings)" />
+    </section>
+
+    <div style={S.txCard}>
+      <h3 style={S.cardTitle}>{editId?"Edit recurring item":"Add a recurring item"}</h3>
+      <p style={{fontSize:12,color:"var(--muted)",margin:"0 0 12px"}}>These are your repeating items — rent, salary, subscriptions. Each new month is automatically seeded once with the active ones as transactions, which you can then adjust per month without touching this template.</p>
+      <div style={S.recurForm}>
+        <input className="cell field" value={f.desc} placeholder="Name (e.g. Rent, Netflix)" onChange={set("desc")} />
+        <input className="cell field" type="number" value={f.amount} placeholder="Amount ₹" onChange={set("amount")} />
+        <select className="select field" value={f.col} onChange={set("col")}>
+          {COLS.map(c=><option key={c} value={c}>{COL_META[c].label}</option>)}
+        </select>
+        <input className="cell field" type="number" min="1" max="31" value={f.day} placeholder="Day of month" onChange={set("day")} title="Day of month" />
+        <div style={{display:"flex",gap:8}}>
+          <button className="primary" style={{flex:1}} onClick={submit} disabled={!f.desc||!f.amount}>{editId?"Save":"+ Add"}</button>
+          {editId && <button className="ghost" onClick={cancel}>Cancel</button>}
+        </div>
+      </div>
+    </div>
+
+    {recurring.length===0 ? (
+      <div style={S.empty}><p style={{margin:0,color:"var(--muted)"}}>No recurring items yet. Add rent, salary, or subscriptions above.</p></div>
+    ) : (
+      <div style={S.debtList}>
+        {recurring.map(r=>(
+          <div key={r.id} style={{...S.debtRow,opacity:r.active?1:0.5}}>
+            <input type="checkbox" checked={r.active} onChange={()=>onToggle(r.id)} title="Active / paused" style={{width:18,height:18,cursor:"pointer",flexShrink:0}} />
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:600}}>{r.desc} · <span style={{color:COL_META[r.col].tint}}>{INR(r.amount)}</span></div>
+              <div style={{fontSize:12,color:"var(--muted)"}}>{COL_META[r.col].label} · day {r.day}{!r.active?" · paused":""}</div>
+            </div>
+            <button className="ghost small" onClick={()=>startEdit(r)}>Edit</button>
+            <button className="ghost small" style={{color:"var(--danger)"}} onClick={()=>onDel(r.id)}>Delete</button>
+          </div>
+        ))}
+      </div>
+    )}
+  </div>;
+}
+
+function YearView({months,goto}){
+  const years=[...new Set(Object.keys(months).map(k=>k.split("-")[0]))].sort();
+  const [year,setYear]=useState(years[years.length-1]||String(new Date().getFullYear()));
+
+  const rows=[];
+  let tot={income:0,needs:0,wants:0,savings:0};
+  for(let mo=1;mo<=12;mo++){
+    const k=`${year}-${String(mo).padStart(2,"0")}`;
+    const m=months[k];
+    const v={income:0,needs:0,wants:0,savings:0};
+    if(m){ const txns=m.txns||[]; for(const c of COLS) v[c]=(m[c]||[]).reduce((a,r)=>a+lineAmount(r,txns),0); }
+    for(const c of COLS) tot[c]+=v[c];
+    rows.push({k,label:new Date(Number(year),mo-1,1).toLocaleString("en-US",{month:"short"}),v,exists:!!m,saved:v.income-v.needs-v.wants-v.savings});
+  }
+  const activeMonths=rows.filter(r=>r.exists).length||1;
+  const totSaved=tot.income-tot.needs-tot.wants-tot.savings;
+
+  return <div>
+    <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16,flexWrap:"wrap"}}>
+      <h3 style={{...S.cardTitle,margin:0}}>Year overview</h3>
+      <select className="select" value={year} onChange={(e)=>setYear(e.target.value)}>
+        {(years.length?years:[year]).map(y=><option key={y} value={y}>{y}</option>)}
+      </select>
+    </div>
+    <section style={S.summary}>
+      <Stat label="Total income" value={tot.income} tint="var(--income)" />
+      <Stat label="Total spent" value={tot.needs+tot.wants} tint="var(--needs)" />
+      <Stat label="Total saved/invested" value={tot.savings} tint="var(--savings)" />
+      <Stat label="Net (income − all out)" value={totSaved} tint={totSaved>=0?"var(--income)":"var(--danger)"} />
+    </section>
+    <div style={S.txCard}>
+      <div style={S.txTableWrap}>
+        <table style={S.txTable}>
+          <thead><tr>
+            <th style={S.th}>Month</th>
+            <th style={{...S.th,textAlign:"right"}}>Income</th>
+            <th style={{...S.th,textAlign:"right"}}>Needs</th>
+            <th style={{...S.th,textAlign:"right"}}>Wants</th>
+            <th style={{...S.th,textAlign:"right"}}>Savings</th>
+            <th style={{...S.th,textAlign:"right"}}>Net</th>
+          </tr></thead>
+          <tbody>
+            {rows.map(r=>(
+              <tr key={r.k} style={{...S.tr,opacity:r.exists?1:0.4,cursor:r.exists?"pointer":"default"}} onClick={()=>r.exists&&goto(r.k)}>
+                <td style={S.td}>{r.label}</td>
+                <td style={{...S.td,textAlign:"right",fontFamily:"var(--mono)"}}>{INR(r.v.income)}</td>
+                <td style={{...S.td,textAlign:"right",fontFamily:"var(--mono)"}}>{INR(r.v.needs)}</td>
+                <td style={{...S.td,textAlign:"right",fontFamily:"var(--mono)"}}>{INR(r.v.wants)}</td>
+                <td style={{...S.td,textAlign:"right",fontFamily:"var(--mono)"}}>{INR(r.v.savings)}</td>
+                <td style={{...S.td,textAlign:"right",fontFamily:"var(--mono)",fontWeight:700,color:r.saved>=0?"var(--income)":"var(--danger)"}}>{INR(r.saved)}</td>
+              </tr>
+            ))}
+            <tr style={{...S.tr,borderTop:"2px solid var(--line)",fontWeight:700}}>
+              <td style={S.td}>Total</td>
+              <td style={{...S.td,textAlign:"right",fontFamily:"var(--mono)"}}>{INR(tot.income)}</td>
+              <td style={{...S.td,textAlign:"right",fontFamily:"var(--mono)"}}>{INR(tot.needs)}</td>
+              <td style={{...S.td,textAlign:"right",fontFamily:"var(--mono)"}}>{INR(tot.wants)}</td>
+              <td style={{...S.td,textAlign:"right",fontFamily:"var(--mono)"}}>{INR(tot.savings)}</td>
+              <td style={{...S.td,textAlign:"right",fontFamily:"var(--mono)",color:totSaved>=0?"var(--income)":"var(--danger)"}}>{INR(totSaved)}</td>
+            </tr>
+            <tr style={{...S.tr,color:"var(--muted)"}}>
+              <td style={S.td}>Monthly avg</td>
+              <td style={{...S.td,textAlign:"right",fontFamily:"var(--mono)"}}>{INR(Math.round(tot.income/activeMonths))}</td>
+              <td style={{...S.td,textAlign:"right",fontFamily:"var(--mono)"}}>{INR(Math.round(tot.needs/activeMonths))}</td>
+              <td style={{...S.td,textAlign:"right",fontFamily:"var(--mono)"}}>{INR(Math.round(tot.wants/activeMonths))}</td>
+              <td style={{...S.td,textAlign:"right",fontFamily:"var(--mono)"}}>{INR(Math.round(tot.savings/activeMonths))}</td>
+              <td style={{...S.td,textAlign:"right",fontFamily:"var(--mono)"}}>{INR(Math.round(totSaved/activeMonths))}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p style={{fontSize:12,color:"var(--muted)",marginTop:10}}>Tap any month with data to open it. Faded rows have no data yet.</p>
+    </div>
+  </div>;
+}
+
 function AssetsView({assets,status,onDelete,onEdit,onBuy}){
   const [sort,setSort] = useState("value");
   const [confirmDel,setConfirmDel] = useState(null); // asset pending deletion
@@ -870,8 +1488,6 @@ const S = {
   colDot:{width:10,height:10,borderRadius:3},
   colTitle:{margin:0,fontSize:17,fontWeight:700,flex:1,fontFamily:"var(--display)"},
   colTotal:{fontFamily:"var(--mono)",fontWeight:700,fontSize:14},
-  rowHead:{display:"grid",gridTemplateColumns:"minmax(0,1fr) 44px 84px 24px",gap:6,fontSize:10,textTransform:"uppercase",letterSpacing:.5,color:"var(--muted)",padding:"0 4px 6px",fontFamily:"var(--mono)"},
-  row:{display:"grid",gridTemplateColumns:"minmax(0,1fr) 44px 84px 24px",gap:6,alignItems:"center",marginBottom:4},
   empty:{background:"var(--card)",border:"1px dashed var(--line)",borderRadius:16,padding:36,textAlign:"center"},
   assetGrid:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:16},
   assetCard:{background:"var(--card)",border:"1px solid var(--line)",borderRadius:16,padding:16},
@@ -922,6 +1538,41 @@ const S = {
   insightRow:{display:"flex",gap:12,alignItems:"flex-start"},
   assetToolbar:{display:"flex",alignItems:"center",gap:10,marginBottom:14},
   paidTag:{fontSize:10,fontWeight:700,color:"var(--income)",border:"1px solid var(--income)",borderRadius:6,padding:"1px 6px",marginLeft:6,verticalAlign:"middle",fontFamily:"var(--mono)"},
+  sortBar:{display:"flex",alignItems:"center",gap:6,marginBottom:6},
+  rowHeadB:{display:"grid",gridTemplateColumns:"34px 1fr 90px 50px",gap:4,fontSize:10,textTransform:"uppercase",letterSpacing:.5,color:"var(--muted)",padding:"0 2px 4px",fontFamily:"var(--mono)"},
+  rowB:{display:"grid",gridTemplateColumns:"34px 1fr 90px 50px",gap:4,alignItems:"center",marginBottom:3},
+  moveCol:{display:"flex",flexDirection:"column",gap:1},
+  rowTools:{display:"flex",alignItems:"center",gap:2,justifyContent:"flex-end"},
+  autoAmt:{textAlign:"right",fontFamily:"var(--mono)",fontSize:13,fontWeight:600,padding:"6px 8px",position:"relative"},
+  autoTag:{display:"inline-block",fontSize:9,background:"var(--accent)",color:"#fff",borderRadius:7,padding:"0 5px",marginLeft:4,verticalAlign:"middle",fontFamily:"var(--mono)"},
+  txCard:{background:"var(--card)",border:"1px solid var(--line)",borderRadius:16,padding:18,marginTop:16},
+  txForm:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8,marginBottom:16},
+  txFilter:{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"},
+  recurForm:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8},
+  txTableWrap:{overflowX:"auto",border:"1px solid var(--line)",borderRadius:12},
+  txTable:{width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:640},
+  th:{textAlign:"left",padding:"10px 12px",fontSize:11,textTransform:"uppercase",letterSpacing:.5,color:"var(--muted)",fontFamily:"var(--mono)",borderBottom:"1px solid var(--line)",background:"var(--bg)",whiteSpace:"nowrap"},
+  tr:{borderBottom:"1px solid var(--line)"},
+  td:{padding:"9px 12px",verticalAlign:"top"},
+  debtForm:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8},
+  debtList:{display:"flex",flexDirection:"column",gap:8,marginTop:16},
+  debtRow:{display:"flex",alignItems:"center",gap:12,background:"var(--card)",border:"1px solid var(--line)",borderRadius:12,padding:"12px 14px"},
+  fabStack:{position:"fixed",right:20,bottom:20,display:"flex",flexDirection:"column",gap:10,zIndex:40},
+  fabBtn:{width:52,height:52,borderRadius:"50%",border:"none",background:"var(--accent)",color:"#fff",fontSize:22,cursor:"pointer",boxShadow:"0 8px 24px rgba(60,40,110,.35)"},
+  reminder:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",background:"#fff7ed",border:"1px solid #f4c89a",borderRadius:12,padding:"12px 16px",marginBottom:16,fontSize:13},
+  expMenu:{position:"absolute",right:0,top:"110%",background:"var(--card)",border:"1px solid var(--line)",borderRadius:12,boxShadow:"0 14px 40px rgba(40,30,70,.18)",padding:6,zIndex:45,width:240},
+  setGrid:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:14,marginBottom:8},
+  calcPanel:{position:"fixed",right:20,bottom:84,width:260,background:"var(--card)",border:"1px solid var(--line)",borderRadius:16,padding:14,boxShadow:"0 18px 50px rgba(40,30,70,.25)",zIndex:41},
+  calcHead:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10},
+  calcDisplay:{background:"var(--bg)",borderRadius:10,padding:"10px 12px",marginBottom:10,minHeight:54,textAlign:"right"},
+  calcExpr:{fontFamily:"var(--mono)",fontSize:18,wordBreak:"break-all"},
+  calcOut:{fontFamily:"var(--mono)",fontSize:13,color:"var(--accent)",marginTop:2},
+  calcKeys:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6},
+  calcKey:{border:"1px solid var(--line)",background:"#fff",borderRadius:9,padding:"12px 0",fontSize:16,cursor:"pointer",font:"inherit",fontFamily:"var(--mono)"},
+  calcOp:{background:"var(--bg)",color:"var(--accent)",fontWeight:700},
+  calcFn:{background:"var(--bg)",color:"var(--muted)"},
+  calcEq:{background:"var(--accent)",color:"#fff",fontWeight:700},
+  calcHint:{fontSize:10,color:"var(--muted)",textAlign:"center",marginTop:8,lineHeight:1.4},
 };
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
